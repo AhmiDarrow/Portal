@@ -4,10 +4,12 @@ Portal turns a Kodi video add-on into a dashboard in your browser. You get conti
 
 Kodi runs in the background as the engine. It resolves the add-on's items, ffmpeg turns the stream into HLS, and the page plays it. You never see a Kodi window. Your watch state belongs to Portal, not to Kodi's library, and Portal works with any Kodi video add-on you pick.
 
+Portal runs on 64-bit Windows 10 and 11. It comes with no add-ons and no video: you choose the add-on, and its accounts and settings stay yours.
+
 ## Install
 
 1. Download `Portal-Setup-<version>.exe` from [Releases](https://github.com/AhmiDarrow/Portal/releases) and run it.
-2. Click through. You don't need administrator rights, and Portal installs for your Windows account only.
+2. Click through. You don't need administrator rights, and Portal installs for your Windows account only. The installer is not code-signed, so Windows may say it comes from an unknown publisher; choose **More info**, then **Run anyway**.
 3. Open **Portal** from the desktop shortcut.
 
 The installer is small because it only carries Portal itself. During setup it downloads and checks the rest:
@@ -20,7 +22,7 @@ The installer is small because it only carries Portal itself. During setup it do
 
 Every download is pinned to a version and checked against a SHA-256 hash. Running the installer again upgrades Portal and skips anything it already has.
 
-### Using Portal
+## Using Portal
 
 - **Portal** (desktop or Start menu) starts Portal in the background, opens the dashboard, and puts a Portal icon in the notification area next to the clock. If Portal is already running, it just opens the dashboard.
 - Closing the dashboard's browser tab doesn't stop Portal. Click the tray icon to open the dashboard again.
@@ -32,17 +34,21 @@ Every download is pinned to a version and checked against a SHA-256 hash. Runnin
 - Movies, episodes and shows have **Watchlist**, **Bookmark** and **Info** buttons while you browse, on the details page and in the player. An episode saves its show. **Info** shows what the add-on knows, then looks up more online: TVmaze for shows, Wikipedia for movies, and TMDB too if you add a TMDB API key under **Server → Media info**. That sends the title and year to those services. You can turn the online lookups off there.
 - **CC** in the player turns subtitles on or off, and Portal remembers which. It picks a subtitle in your languages: a text track inside the video if there is one, else the best match it finds online. Portal looks on Gestdown and TVsubtitles for TV shows, on Subtitle Cat for both (its machine translations are marked and rank below subtitles people made), and on OpenSubtitles, SubDL and SubSource for both once you add your own free API key for each under **Server → Subtitles** (from your account on opensubtitles.com under API consumers, your account on subdl.com under API, or your profile on subsource.net). A service without a key is skipped. The arrow next to **CC** lists every subtitle to choose from and moves the timing by half a second at a time. Searching sends the title, year, and season and episode to those services. Choose your languages, and whether to prefer subtitles for the hearing impaired, under **Server → Subtitles**.
 - Your player choices (quality, subtitles on or off and their language, and **Autoplay next**) are saved in Portal, so every browser and TV starts the same way. Volume stays per device.
-- **Cast** in the player sends the video to a Chromecast or Cast-enabled TV within seconds, from where you are. With **Autoplay next** on, Portal starts the next episode on the TV by itself, even with the dashboard closed. Subtitles go to the TV too: whatever **CC** shows when you cast, and **CC** changes them while casting. The next episode gets subtitles in the same language.
+- **Cast** in the player sends the video to a Chromecast or Cast-enabled TV, from where you are. The TV gets the part of the video that is ready, and Portal hands it a longer one as the rest converts, so a video you have only just started can pause for a moment while more is prepared. With **Autoplay next** on, Portal starts the next episode on the TV by itself, even with the dashboard closed. Subtitles go to the TV too: whatever **CC** shows when you cast, and **CC** changes them while casting. The next episode gets subtitles in the same language.
 - On first run, go to **Source** to pick the add-on Portal should use, or install one from a repository.
+- An add-on's settings open as a page in Portal, also when the add-on itself asks to open them. A button there that runs the add-on shows the add-on's own questions and lists in the page, and then what it saved.
+- **Theme** at the top right changes the colours. Azure, Skyline and Lagoon keep the highlight and the error colour far apart for people who see reds, greens or blues weakly.
 - To uninstall, use **Settings → Apps**. The uninstaller asks before it deletes your library.
 
-### Updates
+### Keyboard
+
+In the player: **Space** or **K** play/pause, **J**/**L** or **←**/**→** back/forward 10 seconds, **↑**/**↓** volume, **M** mute, **C** subtitles on or off, **F** fullscreen (or double-click the video), **N** next episode.
+
+## Updates
 
 Portal checks its [GitHub releases](https://github.com/AhmiDarrow/Portal/releases) when it starts and every 12 hours. When a new version is out, the tray icon tells you once and its menu gets **Install update**, and the **Server** page offers it too. Portal downloads the new installer, checks it against its SHA-256 hash before running it, closes, updates, and comes back in the tray. Anything playing stops.
 
-Player keys: **Space** or **K** play/pause, **J**/**L** or **←**/**→** back/forward 10 seconds, **↑**/**↓** volume, **M** mute, **C** subtitles on or off, **F** fullscreen (or double-click the video), **N** next episode.
-
-### Casting and your network
+## Casting and your network
 
 Casting only works if TVs on your network can reach Portal, so by default Portal listens on your local network (port 8490). The first time it starts, Windows may ask whether to allow that. You can turn this off under **Server → Allow TVs on this network**, and Portal will then listen on this PC only. Other devices pair once before they can use Portal. A phone, tablet or TV that opens Portal shows a 6-digit number; type it under **Server → Devices** on the PC and that device is in. Remove a device there to end its access. A paired device can browse, play, cast and keep your watchlist; settings, add-ons, updates and everything on the **Server** page change only on the PC. Video for a cast and the subtitles a TV loads stay open to the network, under a random address for each play, because a TV's built-in player cannot pair.
 
@@ -60,7 +66,7 @@ Casting only works if TVs on your network can reach Portal, so by default Portal
 | `%LOCALAPPDATA%\Portal\metadata-cache.json` | info looked up online, kept for up to 7 days |
 | `%LOCALAPPDATA%\Portal\subtitles.json` | your subtitle languages, and your OpenSubtitles key and sign-in and your SubDL and SubSource keys if you added them, encrypted for your Windows account |
 | `%LOCALAPPDATA%\Portal\subtitles` | subtitles downloaded online, kept as WebVTT (up to 400 files) |
-| `%LOCALAPPDATA%\Portal\hls` | the stream cache: video Portal is converting for playback. Cleared each time Portal starts; can reach several GB while playing |
+| `%LOCALAPPDATA%\Portal\hls` | the stream cache: video Portal is converting for playback, and the copy it makes for a TV while casting. Cleared each time Portal starts; can reach several GB while playing |
 | `%LOCALAPPDATA%\Portal\updates` | installers downloaded by **Install update** |
 | `%LOCALAPPDATA%\Portal\staging` | add-ons unpacked here before they are copied into Kodi |
 | `%LOCALAPPDATA%\Portal\logs\portal.log` | the log of the current run (`portal.previous.log` is the one before) |
