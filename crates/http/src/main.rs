@@ -974,6 +974,7 @@ async fn settings_action(
     // RunPlugin rows run the builtin the add-on stored. ExecuteAddon would open
     // a video plugin as a directory and cover its dialog.
     state.0.supervisor.ensure().await.map_err(from_engine)?;
+    note_run(&id);
     state
         .0
         .supervisor
@@ -1015,6 +1016,9 @@ async fn run_plugin(
     // The confirm has to be created while Kodi is on screen. A dialog that
     // opens on a hidden player ignores the later Yes click.
     let _ = state.0.supervisor.set_window(true).await;
+    if let Some(addon) = plugin_addon(&builtin) {
+        note_run(&addon);
+    }
     state
         .0
         .supervisor
@@ -1099,7 +1103,51 @@ async fn prompt_get(State(state): State<AppState>) -> Result<Json<PromptBody>, A
     state.0.supervisor.ensure().await.map_err(from_engine)?;
     let prompt = state.0.prompts.read().await.map_err(from_engine)?;
     let prompt = prompt.map(|prompt| picking_view(&state, prompt));
-    Ok(Json(PromptBody { prompt }))
+    let settings_addon = state
+        .0
+        .prompts
+        .take_opened_settings()
+        .and_then(|heading| opened_settings_addon(&state.0.settings, &heading));
+    Ok(Json(PromptBody {
+        prompt,
+        settings_addon,
+    }))
+}
+
+/// The add-on a run or a settings button was started for, a moment ago.
+static LAST_RUN: std::sync::Mutex<Option<(String, Instant)>> = std::sync::Mutex::new(None);
+const LAST_RUN_KEPT: Duration = Duration::from_secs(60);
+
+fn note_run(addon_id: &str) {
+    *LAST_RUN.lock().unwrap_or_else(|err| err.into_inner()) =
+        Some((addon_id.to_string(), Instant::now()));
+}
+
+/// The add-on id in a plugin link, bare or inside a builtin.
+fn plugin_addon(link: &str) -> Option<String> {
+    let at = link.to_ascii_lowercase().find("plugin://")?;
+    let host: String = link[at + "plugin://".len()..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        .collect();
+    (!host.is_empty()).then_some(host)
+}
+
+/// Which add-on a settings window belongs to. Kodi heads it with its word
+/// for "Settings", a dash and the add-on's name, and a name can hold a dash
+/// too, so every tail of the heading is tried. A heading that names no
+/// installed add-on belongs to the add-on that was just run.
+fn opened_settings_addon(settings: &Settings, heading: &str) -> Option<String> {
+    let named = heading
+        .match_indices(" - ")
+        .find_map(|(at, dash)| settings.addon_named(&heading[at + dash.len()..]));
+    named.or_else(|| {
+        let (addon, at) = LAST_RUN
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()?;
+        (at.elapsed() <= LAST_RUN_KEPT && settings.addon_installed(&addon)).then_some(addon)
+    })
 }
 
 /// A source list Portal is answering itself shows as a step, not as a list

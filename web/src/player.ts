@@ -11,6 +11,7 @@ import {
   type CastSubtitle,
   type DeviceCast,
   seasonFoldersFor,
+  settingsHref,
   type BrowseItem,
   type BrowsePage,
   type Episode,
@@ -2369,7 +2370,7 @@ function hidePrompt(): void {
  */
 export async function awaitAddonPrompts(
   onNote?: (text: string, prompt: Prompt | null) => void,
-): Promise<"prompted" | "idle"> {
+): Promise<"prompted" | "idle" | "settings"> {
   const started = Date.now();
   const limit = started + 15 * 60_000;
   let deadline = started + 120_000;
@@ -2378,7 +2379,14 @@ export async function awaitAddonPrompts(
   while (Date.now() < deadline) {
     let prompt: Prompt | null = null;
     try {
-      prompt = (await api.prompt()).prompt;
+      const read = await api.prompt();
+      prompt = read.prompt;
+      // The add-on opened its settings in Kodi: Portal's own form takes over.
+      if (read.settings_addon) {
+        hidePrompt();
+        location.hash = settingsHref(read.settings_addon);
+        return "settings";
+      }
     } catch {
       await sleep(400);
       continue;

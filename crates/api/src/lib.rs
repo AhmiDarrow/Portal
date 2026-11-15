@@ -625,6 +625,10 @@ pub struct Prompt {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PromptBody {
     pub prompt: Option<Prompt>,
+    /// The add-on whose settings Kodi just opened. Portal shows its own
+    /// settings form for it instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_addon: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

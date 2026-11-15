@@ -95,7 +95,13 @@ pub struct Prompts {
     /// Profile `userdata/guisettings.xml` when a profile root was given.
     /// Tests omit it, so a focus builtin is not sent to a running Kodi.
     guisettings: Option<PathBuf>,
+    /// The heading of an add-on settings window Kodi opened and Portal
+    /// closed, until the page asks which add-on it was.
+    opened_settings: Mutex<Option<(String, Instant)>>,
 }
+
+/// How long a closed settings window is remembered for the page.
+const OPENED_SETTINGS_KEPT: Duration = Duration::from_secs(30);
 
 impl Prompts {
     pub fn new(client: KodiClient) -> Self {
@@ -141,7 +147,19 @@ impl Prompts {
             list_read: Mutex::new(None),
             showing: Mutex::new(Showing::default()),
             guisettings,
+            opened_settings: Mutex::new(None),
         }
+    }
+
+    /// The heading of the add-on settings window Kodi last opened, once.
+    /// Kodi writes it as its word for "Settings", a dash, and the add-on's name.
+    pub fn take_opened_settings(&self) -> Option<String> {
+        let (heading, at) = self
+            .opened_settings
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .take()?;
+        (at.elapsed() <= OPENED_SETTINGS_KEPT).then_some(heading)
     }
 
     /// None when Kodi is showing a normal window or a window Portal does not mirror.
@@ -302,11 +320,27 @@ impl Prompts {
 
     async fn read_connected(&self) -> Result<Option<Prompt>, EngineError> {
         if let Some(id) = self.window_id().await? {
-            // Add-on settings opened after authorize stays in hidden Kodi; close it
-            // so Portal remains the settings UI.
+            // An add-on that opens its settings would leave them in hidden
+            // Kodi. The window is closed and its heading kept, so the page
+            // can open Portal's own form for that add-on.
             if id == 10140 {
                 let _gate = DIALOG_ACTIONS.lock().await;
                 if self.window_id().await? == Some(10140) {
+                    let heading = self
+                        .labels([SETTINGS_HEADING])
+                        .await
+                        .ok()
+                        .and_then(|labels| {
+                            labels
+                                .get(SETTINGS_HEADING)
+                                .and_then(Value::as_str)
+                                .map(|text| text.trim().to_string())
+                        })
+                        .unwrap_or_default();
+                    *self
+                        .opened_settings
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner()) = Some((heading, Instant::now()));
                     let _ = self.call("Input.Back", json!({})).await;
                 }
                 return Ok(None);
@@ -1642,6 +1676,9 @@ impl Prompts {
             .clone()
     }
 }
+
+/// The heading label of Kodi's settings dialogs, the same in every skin.
+const SETTINGS_HEADING: &str = "Control.GetLabel(2)";
 
 /// Kodi's own dialogs: the 10100 range, and the ones Portal reads as prompts.
 fn is_dialog_window(id: i64) -> bool {

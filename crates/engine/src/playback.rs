@@ -1611,6 +1611,11 @@ fn canon_plugin(url: &str) -> String {
 }
 
 const NO_PLAYABLE_STREAM: &str = "The add-on did not return a playable stream.";
+/// Kodi's corner notice cannot be read, only seen. An add-on that shows one
+/// and then goes quiet has said why it will not play.
+const NOTICE_NO_STREAM: &str = "The add-on found nothing to play and showed a notice in Kodi. Check the add-on's settings, such as its accounts and where it looks for videos.";
+/// How long an add-on may stay quiet after a notice before that is its answer.
+const NOTICE_IDLE: f64 = 12.0;
 const CANCELLED: &str = "The add-on's question was cancelled.";
 
 /// The job's error text for a failure.
@@ -1697,6 +1702,7 @@ async fn drive_player(
         // for a stream starts when it returns, still inside the resolve cap.
         let mut poll_deadline = poll_window(Instant::now(), cap);
         let mut saw_player = false;
+        let mut noticed = false;
         let mut idle = 0.0_f64;
         let mut last_fraction: Option<f64> = None;
         let mut last_tick = Instant::now();
@@ -1774,10 +1780,21 @@ async fn drive_player(
                         }
                     }
                 }
+                if !noticed && notice_showing(client).await {
+                    noticed = true;
+                    idle = 0.0;
+                }
                 idle += RESOLVE_TICK.as_secs_f64();
                 // After a cancelled question the add-on usually just returns.
                 let cancelled = crate::prompts::CANCELS.load(Ordering::SeqCst) != cancels;
-                if idle > if cancelled { 5.0 } else { 45.0 } {
+                let quiet = if cancelled {
+                    5.0
+                } else if noticed {
+                    NOTICE_IDLE
+                } else {
+                    45.0
+                };
+                if idle > quiet {
                     break;
                 }
             }
@@ -1797,6 +1814,9 @@ async fn drive_player(
         }
         if crate::prompts::CANCELS.load(Ordering::SeqCst) != cancels {
             return Err(EngineError::Message(CANCELLED.into()));
+        }
+        if noticed {
+            return Err(EngineError::Message(NOTICE_NO_STREAM.into()));
         }
         Err(EngineError::Message(NO_PLAYABLE_STREAM.into()))
     }
@@ -2044,6 +2064,22 @@ async fn addon_busy_window(client: &KodiClient) -> bool {
     };
     keys.iter()
         .any(|name| labels.get(name).and_then(Value::as_bool) == Some(true))
+}
+
+/// Whether Kodi is showing its corner notice, the one add-ons raise with
+/// a notification.
+async fn notice_showing(client: &KodiClient) -> bool {
+    const NOTICE: &str = "Window.IsVisible(notification)";
+    rpc(
+        client,
+        "XBMC.GetInfoBooleans",
+        json!({ "booleans": [NOTICE] }),
+        Duration::from_secs(4),
+    )
+    .await
+    .ok()
+    .and_then(|found| found.get(NOTICE).and_then(Value::as_bool))
+    .unwrap_or(false)
 }
 
 async fn current_window(client: &KodiClient) -> Option<i64> {

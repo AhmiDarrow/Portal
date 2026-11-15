@@ -549,7 +549,7 @@ export const api = {
     }
     return parsed.path;
   },
-  prompt: () => send<{ prompt: Prompt | null }>("/api/prompt"),
+  prompt: () => send<{ prompt: Prompt | null; settings_addon?: string }>("/api/prompt"),
   pairMe: () => send<PairMe>("/api/pair/me"),
   pairStart: () => send<PairStart>("/api/pair/start", jsonInit("POST", {})),
   pairStatus: (ticket: string) =>

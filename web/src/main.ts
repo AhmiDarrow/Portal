@@ -2426,6 +2426,10 @@ async function runAction(addonId: string, settingId: string, note: HTMLElement |
       const outcome = await awaitAddonPrompts((text, prompt) => {
         if (note) paintActionNote(note, text, prompt);
       });
+      if (outcome === "settings") {
+        handed = true;
+        return;
+      }
       if (note) {
         note.textContent =
           outcome === "idle" ? "The add-on did not open a dialog." : "Done";
