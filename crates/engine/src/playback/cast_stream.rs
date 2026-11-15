@@ -463,6 +463,19 @@ impl Player {
         });
     }
 
+    /// Ends the encoder of the job's whole-title stream: no TV plays it
+    /// now. The pieces stay, and the next request for one starts it again.
+    pub fn cast_rest(&self, job_id: &str) {
+        let run = self
+            .lock_jobs()
+            .get_mut(job_id)
+            .and_then(|slot| slot.cast.as_mut())
+            .and_then(|cast| cast.run.take());
+        if let Some(run) = run {
+            tokio::task::spawn_blocking(move || end_process(&run.child));
+        }
+    }
+
     /// An embedded subtitle on the title's own clock, for a whole-title stream.
     pub fn cast_subtitle(&self, session: &str, id: u32) -> Option<String> {
         let job_id = self.lock_sessions().get(session).cloned()?;

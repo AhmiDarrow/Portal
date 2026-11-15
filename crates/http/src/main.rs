@@ -217,6 +217,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     );
     let player = Player::new(paths::ffmpeg(), paths::ffprobe(), portal_dir.join("hls"));
     player.set_hardware(app::hardware_saved(&portal_dir));
+    if let Some(encoder) = std::env::var("PORTAL_ENCODER")
+        .ok()
+        .and_then(|name| portal_engine::Encoder::named(&name))
+    {
+        tracing::info!("Encoder named by PORTAL_ENCODER: {}", encoder.name());
+        player.assume_hardware(encoder);
+    }
     backup::on_version_change(&portal_dir, env!("CARGO_PKG_VERSION"));
     let store = Store::open(portal_dir.join("library.json"))?;
     let cast_hub = cast::CastHub::open(&portal_dir);

@@ -96,6 +96,7 @@ These environment variables are all optional.
 | `FFMPEG`, `FFPROBE` | the copies in the install folder, then `PATH` |
 | `PORTAL_CAST_PYTHON`, `PORTAL_CAST_AGENT` | the install folder's `python\` and `cast\` |
 | `PORTAL_CAST_HOSTS` | extra TV addresses to check, separated by commas |
+| `PORTAL_ENCODER` | the graphics card Portal finds by itself. Set `nvidia`, `intel`, `amd` or `cpu` to name it instead |
 | `PORTAL_TRUST_LAN` | unset. `1` lets every device on your network use Portal without pairing |
 | `PORTAL_ALLOWED_HOSTS` | extra host names Portal answers to, separated by commas. By default it answers only to IP addresses, `localhost` and local names (such as `mypc` or `mypc.local`), so other websites can't reach it |
 | `PORTAL_WEB_DIST`, `PORTAL_HLS_JS` | the install folder's `web\` and `vendor\hls.min.js` |

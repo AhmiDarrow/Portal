@@ -1534,9 +1534,15 @@ fn watch_device(
     let backend = AppBackend {
         state: state.clone(),
     };
+    let cast_job = watched.job_id.clone();
     tokio::spawn(async move {
         let outcome = watch::drive(&backend, gen, watched, cancel).await;
         tracing::info!("device cast watch ended: {}", outcome_label(&outcome));
+        // No TV plays the job now, unless a new cast of it has just begun.
+        let view = lock_cast(&backend.state).device_view();
+        if !(view.active && view.job_id.as_deref() == Some(cast_job.as_str())) {
+            backend.state.0.player.cast_rest(&cast_job);
+        }
     });
 }
 

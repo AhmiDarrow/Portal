@@ -29,6 +29,13 @@ impl Encoder {
     pub fn is_hardware(self) -> bool {
         self != Encoder::Cpu
     }
+
+    /// The encoder a short name stands for, as `name` writes it.
+    pub fn named(name: &str) -> Option<Self> {
+        [Encoder::Cpu, Encoder::Nvidia, Encoder::Intel, Encoder::Amd]
+            .into_iter()
+            .find(|encoder| encoder.name() == name.trim().to_ascii_lowercase())
+    }
 }
 
 /// The graphics cards looked for, in the order they are tried.
@@ -109,6 +116,12 @@ pub(super) fn encode_args(encoder: Encoder, maxrate: Option<u64>) -> Vec<String>
     .into_iter()
     .map(String::from)
     .collect();
+    if encoder == Encoder::Intel {
+        // A quality target with a ceiling needs a rate to aim at as well.
+        if let Some(rate) = maxrate {
+            args.extend(["-b:v".into(), (rate * 7 / 10).to_string()]);
+        }
+    }
     if encoder == Encoder::Amd {
         // This encoder has no steady-quality mode with a ceiling.
         match maxrate {
@@ -192,6 +205,12 @@ impl Player {
             .hardware
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    /// Names the encoder this PC has, in place of looking for one. For a PC
+    /// where the look picks wrongly, and for trying a card's settings.
+    pub fn assume_hardware(&self, encoder: Encoder) {
+        self.lock_hardware().found = Some(encoder);
     }
 
     /// Whether a graphics card may encode. Streams already running keep
