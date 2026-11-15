@@ -256,7 +256,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/update/install", post(update::update_install))
         .route("/api/app", get(app::app_get))
         .route("/api/app/autostart", post(app::app_autostart))
-        .route("/api/app/encoder", post(app::app_encoder))
+        .route(
+            "/api/app/encoder",
+            get(app::app_encoder_get).post(app::app_encoder),
+        )
         .route("/api/app/restart", post(app::app_restart))
         .route("/api/app/quit", post(app::app_quit))
         .route("/api/app/logs", post(app::app_logs))

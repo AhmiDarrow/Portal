@@ -71,9 +71,16 @@ fn save_hardware(dir: &std::path::Path, on: bool) -> std::io::Result<()> {
 }
 
 async fn encoder_view(state: &AppState) -> EncoderView {
+    // The first look runs in a task of its own, so a caller that gives up
+    // early (the tray waits only a few seconds) does not cut it short and
+    // start it over on the next ask.
+    let player = state.0.player.clone();
+    let card = tokio::spawn(async move { player.hardware().await.name() })
+        .await
+        .unwrap_or("cpu");
     EncoderView {
         hardware: state.0.player.hardware_wanted(),
-        card: state.0.player.hardware().await.name(),
+        card,
     }
 }
 
@@ -173,6 +180,16 @@ pub(crate) async fn app_get(
 ) -> Result<Json<AppView>, ApiError> {
     this_pc(peer)?;
     Ok(Json(view(&state).await))
+}
+
+/// `GET /api/app/encoder`: just the encoder choice, for the tray to read
+/// every few seconds without asking the launcher about "Start with Windows".
+pub(crate) async fn app_encoder_get(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+) -> Result<Json<EncoderView>, ApiError> {
+    this_pc(peer)?;
+    Ok(Json(encoder_view(&state).await))
 }
 
 /// `POST /api/app/encoder`: lets a graphics card encode the video, or keeps

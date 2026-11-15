@@ -219,7 +219,18 @@ pub struct Health {
     pub engine: Option<String>,
     /// Whether TVs on the network may connect, from `/api/cast`.
     pub lan: Option<bool>,
+    /// What encodes video, from `/api/app/encoder`.
+    pub encoder: Option<EncoderChoice>,
     pub update: Option<Update>,
+}
+
+/// Whether a graphics card may encode video, and which card the PC has.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncoderChoice {
+    /// Whether a graphics card may be used, as the user last chose.
+    pub hardware: bool,
+    /// nvidia, intel or amd, or cpu when the PC has no card that works.
+    pub card: String,
 }
 
 /// The service's update state, from `/api/update`.
@@ -241,6 +252,7 @@ pub fn health(port: u16) -> Health {
             probe,
             engine: None,
             lan: None,
+            encoder: None,
             update: None,
         };
     }
@@ -254,6 +266,7 @@ pub fn health(port: u16) -> Health {
         probe,
         engine: read("/api/status").and_then(|body| engine_state(&body)),
         lan: read("/api/cast").and_then(|body| body["lan"].as_bool()),
+        encoder: read("/api/app/encoder").and_then(|body| parse_encoder(&body)),
         update: read("/api/update").and_then(|body| parse_update(&body)),
     }
 }
@@ -294,6 +307,23 @@ pub fn set_lan(port: u16, lan: bool) -> Result<LanReply, String> {
     response
         .json()
         .and_then(|body| parse_lan_reply(&body))
+        .ok_or_else(|| "Portal sent an unexpected reply.".to_string())
+}
+
+fn parse_encoder(body: &Value) -> Option<EncoderChoice> {
+    Some(EncoderChoice {
+        hardware: body["hardware"].as_bool()?,
+        card: body["card"].as_str()?.to_string(),
+    })
+}
+
+/// Lets a graphics card encode video, or keeps it on the processor.
+pub fn set_encoder(port: u16, hardware: bool) -> Result<EncoderChoice, String> {
+    let body = serde_json::json!({ "on": hardware }).to_string();
+    let response = call(port, "POST", "/api/app/encoder", &[], Some(&body), QUICK)?;
+    response
+        .json()
+        .and_then(|body| parse_encoder(&body["encoder"]))
         .ok_or_else(|| "Portal sent an unexpected reply.".to_string())
 }
 
