@@ -2317,7 +2317,10 @@ function fieldHtml(addonId: string, field: SettingsField): string {
     } else if (!id && field.action) {
       control = `<button type="button" data-run="${esc(field.action)}" data-kind="action"${disabled}>${esc(label)}</button>`;
     } else {
-      control = `<button type="button" data-setting="${esc(id)}" data-kind="action"${disabled}>${esc(label)}</button>`;
+      // What the action last stored, as Kodi shows beside the button.
+      const shown = plainSettingLabel(field.value);
+      const hidden = shown ? "" : " hidden";
+      control = `<button type="button" data-setting="${esc(id)}" data-kind="action"${disabled}>${esc(label)}</button><span class="setting-value" data-value-for="${esc(id)}"${hidden}>${esc(shown)}</span>`;
     }
   } else if (field.kind === "secret") {
     control = `<label for="${fid}">${esc(label)}</label><input id="${fid}" type="password" data-setting="${esc(id)}" data-kind="secret" autocomplete="off" placeholder="Leave blank to keep the saved secret"${disabled} />`;
@@ -2339,6 +2342,7 @@ function wireSettings(doc: SettingsDoc): void {
       node.disabled = true;
       void runAddonAction({ id: target, label: node.textContent || "", path: target, kind: "run" }).finally(() => {
         if (node.isConnected) node.disabled = false;
+        void refreshSettings(doc);
       });
       if (note) note.textContent = "";
     });
@@ -2354,6 +2358,7 @@ function wireSettings(doc: SettingsDoc): void {
         node.disabled = true;
         void runAction(addonId, settingId, note, node.textContent || "").finally(() => {
           node.disabled = false;
+          void refreshSettings(doc);
         });
       });
       return;
@@ -2381,6 +2386,46 @@ function wireSettings(doc: SettingsDoc): void {
 }
 
 /** Sets a field's value in the loaded settings (only over `from`, when given); answers the value it had. */
+/**
+ * An action is the add-on changing its own settings, so the form is read
+ * again and shows what it stored. A field being typed in is left alone.
+ */
+async function refreshSettings(doc: SettingsDoc): Promise<void> {
+  let fresh: SettingsDoc;
+  try {
+    fresh = await api.settings(doc.addon_id);
+  } catch {
+    return;
+  }
+  for (const category of fresh.categories) {
+    for (const field of category.fields) {
+      if (!field.id || field.kind === "secret" || field.kind === "header") continue;
+      noteSetting(doc, field.id, field.value);
+      paintSetting(doc.addon_id, field.id, field.value);
+    }
+  }
+}
+
+function paintSetting(addonId: string, settingId: string, value: string): void {
+  main?.querySelectorAll<HTMLElement>(".setting").forEach((row) => {
+    if (row.dataset.addon !== addonId) return;
+    row.querySelectorAll<HTMLElement>("[data-value-for], [data-setting]").forEach((node) => {
+      if (node.dataset.valueFor === settingId) {
+        const shown = plainSettingLabel(value);
+        node.textContent = shown;
+        node.hidden = !shown;
+        return;
+      }
+      if (node.dataset.setting !== settingId || node === document.activeElement) return;
+      if (node instanceof HTMLInputElement && node.type === "checkbox") {
+        node.checked = value === "true";
+      } else if (node instanceof HTMLInputElement || node instanceof HTMLSelectElement) {
+        node.value = value;
+      }
+    });
+  });
+}
+
 function noteSetting(doc: SettingsDoc, settingId: string, value: string, from?: string): string | null {
   let before: string | null = null;
   for (const category of doc.categories) {
@@ -2408,6 +2453,7 @@ async function saveSetting(addonId: string, settingId: string, value: string, no
 async function runAction(addonId: string, settingId: string, note: HTMLElement | null, name = ""): Promise<void> {
   const ticket = showPage(describeAction(name));
   let handed = false;
+  const here = location.hash;
   try {
     const result = await api.action(addonId, settingId);
     if (result.settings_addon) {
@@ -2426,7 +2472,9 @@ async function runAction(addonId: string, settingId: string, note: HTMLElement |
       const outcome = await awaitAddonPrompts((text, prompt) => {
         if (note) paintActionNote(note, text, prompt);
       });
-      if (outcome === "settings") {
+      // Settings for another add-on opened: that page takes over. The same
+      // add-on's settings are this page, which stays.
+      if (outcome === "settings" && location.hash !== here) {
         handed = true;
         return;
       }

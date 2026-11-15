@@ -548,6 +548,12 @@ main > p { max-width: 68ch; }
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
+.setting-value {
+  margin-left: 0.6rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
 .check { display: flex; gap: 0.45rem; align-items: center; }
 
 .dock {
