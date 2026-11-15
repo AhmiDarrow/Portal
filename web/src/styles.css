@@ -1727,13 +1727,13 @@ body.cast-mode > #prompt {
 .card-play strong {
   padding: 0 0.7rem;
   font-family: var(--ui);
-  font-weight: 700;
+  font-weight: 400;
   font-size: 1.05rem;
   line-height: 1.25;
 }
 .card .meta a { color: var(--muted); font-size: 0.88rem; text-decoration: none; }
 .card .meta a:hover { color: var(--gold); text-decoration: none; }
-.history-item strong, .addon strong { font-family: var(--ui); font-weight: 700; }
+.history-item strong, .addon strong { font-family: var(--ui); font-weight: 400; }
 .card-play .muted { padding: 0 0.7rem; font-size: 0.88rem; }
 .card-play > :last-child { margin-bottom: 0.55rem; }
 
