@@ -5,3 +5,4 @@
 *.iss text eol=crlf
 *.ico binary
 web/vendor/*.min.js -diff
+*.woff2 binary

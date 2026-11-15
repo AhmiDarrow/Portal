@@ -1,3 +1,31 @@
+/* Remedy Sans for text and Ahmi Pixel for headings, both under the SIL Open
+   Font License (fonts/*.LICENSE.txt). They draw basic Latin; other characters
+   come from the fonts named after them. */
+@font-face {
+  font-family: "Remedy Sans";
+  src: url("./fonts/RemedySans-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Remedy Sans";
+  src: url("./fonts/RemedySans-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Ahmi Pixel";
+  src: url("./fonts/AhmiPixel-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Ahmi Pixel";
+  src: url("./fonts/AhmiPixel-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --bg: #14120e;
@@ -9,8 +37,10 @@
   --gold: #e2b15a;
   --error: #f08a74;
   --track: #2c281f;
-  --display: "Palatino Linotype", Palatino, Georgia, serif;
-  --ui: "Segoe UI", sans-serif;
+  /* One Ahmi Pixel dot is an eighth of the font size, so headings are set in
+     multiples of 8px, where its letters are sharp. */
+  --display: "Ahmi Pixel", "Remedy Sans", "Segoe UI", sans-serif;
+  --ui: "Remedy Sans", "Segoe UI", sans-serif;
   --radius: 14px;
   --radius-sm: 8px;
   --shadow: 0 12px 32px color-mix(in srgb, #000 28%, transparent);
@@ -121,10 +151,9 @@ button:disabled { opacity: 0.45; cursor: default; }
   align-items: center;
   gap: 0.55rem;
   font-family: var(--display);
-  font-size: 1.65rem;
+  font-size: 24px;
   line-height: 1;
   color: var(--text);
-  letter-spacing: 0.01em;
   text-decoration: none;
 }
 .brand:hover { color: var(--gold); text-decoration: none; }
@@ -214,7 +243,7 @@ nav a[aria-current="page"] {
   justify-content: space-between;
   gap: 1rem;
 }
-.activity-head h2 { margin: 0; min-width: 0; font-size: 1.35rem; overflow-wrap: anywhere; }
+.activity-head h2 { margin: 0; min-width: 0; font-size: 16px; overflow-wrap: anywhere; }
 .activity-percent {
   flex: 0 0 auto;
   color: var(--gold);
@@ -257,9 +286,10 @@ main {
   scroll-margin-top: 4.75rem;
 }
 
-h1, h2, h3 { font-family: var(--display); font-weight: 500; margin: 0 0 0.6rem; }
-h1 { font-size: 2.2rem; line-height: 1.12; letter-spacing: -0.02em; overflow-wrap: anywhere; }
-h2 { letter-spacing: -0.01em; }
+h1, h2, h3 { font-family: var(--display); font-weight: 400; margin: 0 0 0.6rem; }
+h1 { font-size: 32px; line-height: 1.2; overflow-wrap: anywhere; }
+h2 { font-size: 24px; line-height: 1.25; }
+h3 { font-size: 16px; line-height: 1.4; }
 .muted { color: var(--muted); }
 .error { color: var(--error); }
 
@@ -271,7 +301,7 @@ h2 { letter-spacing: -0.01em; }
   align-items: center;
   gap: 0.55rem;
   margin-bottom: 0.75rem;
-  font-size: 1.35rem;
+  font-size: 24px;
 }
 .shelf h2::before {
   content: "";
@@ -443,7 +473,7 @@ h1 .count { font-size: 0.55em; color: var(--muted); font-family: var(--ui); vert
   margin-top: 0.2rem;
   padding-bottom: 0.4rem;
   border-bottom: 1px solid var(--line);
-  font-size: 1.35rem;
+  font-size: 24px;
 }
 .episode > .muted { font-variant-numeric: tabular-nums; letter-spacing: 0.03em; }
 main > p { max-width: 68ch; }
@@ -1088,7 +1118,7 @@ body.theater #dock-close { margin: 0; }
   white-space: nowrap;
 }
 .theater-show:empty { display: none; }
-.theater-episodes-head h3 { margin: 0.1rem 0 0; font-size: 1.15rem; line-height: 1.25; }
+.theater-episodes-head h3 { margin: 0.1rem 0 0; font-size: 16px; line-height: 1.25; }
 .theater-seasons {
   display: flex;
   flex: none;
@@ -1696,15 +1726,14 @@ body.cast-mode > #prompt {
 .card-actions .info-btn { margin-left: auto; }
 .card-play strong {
   padding: 0 0.7rem;
-  font-family: var(--display);
-  font-weight: 500;
+  font-family: var(--ui);
+  font-weight: 700;
   font-size: 1.05rem;
   line-height: 1.25;
-  letter-spacing: -0.01em;
 }
 .card .meta a { color: var(--muted); font-size: 0.88rem; text-decoration: none; }
 .card .meta a:hover { color: var(--gold); text-decoration: none; }
-.history-item strong, .addon strong { font-family: var(--display); font-weight: 500; }
+.history-item strong, .addon strong { font-family: var(--ui); font-weight: 700; }
 .card-play .muted { padding: 0 0.7rem; font-size: 0.88rem; }
 .card-play > :last-child { margin-bottom: 0.55rem; }
 
@@ -2066,8 +2095,8 @@ body.info-open { overflow: hidden; }
 .info-heading { flex: 1 1 auto; min-width: 0; }
 .info-heading h2 {
   margin: 0;
-  font-size: 2.1rem;
-  line-height: 1.12;
+  font-size: 32px;
+  line-height: 1.2;
   overflow-wrap: anywhere;
 }
 .info-kicker {
@@ -2120,7 +2149,7 @@ body.info-open { overflow: hidden; }
 }
 .info-credits dt { color: var(--muted); }
 .info-credits dd { margin: 0; overflow-wrap: anywhere; }
-.info-section h3 { font-size: 1.2rem; margin: 0 0 0.55rem; }
+.info-section h3 { font-size: 16px; margin: 0 0 0.55rem; }
 .info-cast {
   list-style: none;
   margin: 0 0 1.2rem;
@@ -2225,7 +2254,7 @@ body.info-open { overflow: hidden; }
   .info-hero.has-fanart .info-head { padding-top: 6.5rem; }
   .info-poster { flex-basis: 6.6rem; border-radius: 8px; }
   .info-poster.is-still { flex-basis: 10rem; }
-  .info-heading h2 { font-size: 1.55rem; }
+  .info-heading h2 { font-size: 24px; }
   .info-body { padding: 1.1rem 1rem 0.3rem; }
   .info-foot { padding: 0.7rem 1rem calc(0.9rem + env(safe-area-inset-bottom, 0px)); }
   .info-cast { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.4rem; }

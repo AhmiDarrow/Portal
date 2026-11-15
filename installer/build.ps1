@@ -112,6 +112,8 @@ Copy-Item (Join-Path $Root 'target\release\portal-launcher.exe') $Stage
 Copy-Item (Join-Path $Root 'web\dist') (Join-Path $Stage 'web') -Recurse
 Copy-Item (Join-Path $Root 'web\vendor\hls.min.js') (Join-Path $Stage 'vendor')
 Copy-Item (Join-Path $Root 'web\vendor\hls.js.LICENSE.txt') (Join-Path $Stage 'vendor')
+# The dashboard's typefaces are built into web\dist; their licences go with them.
+Copy-Item (Join-Path $Root 'web\src\fonts\*.LICENSE.txt') (Join-Path $Stage 'vendor')
 Copy-Item (Join-Path $Root 'tools\cast\cast_agent.py') (Join-Path $Stage 'cast')
 foreach ($doc in 'LICENSE', 'README.md') { Copy-Item (Join-Path $Root $doc) $Stage }
 # The licences of the Rust crates built into portal.exe and portal-launcher.exe.
