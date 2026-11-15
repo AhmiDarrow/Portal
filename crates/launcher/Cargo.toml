@@ -1,0 +1,20 @@
+[package]
+name = "portal-launcher"
+description = "Portal's tray icon: starts the service, opens the dashboard, and quits Portal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "portal-launcher"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[build-dependencies]
+embed-resource = "3"

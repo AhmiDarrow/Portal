@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Portal: a local dashboard for one Kodi video add-on, with continue watching, a watchlist, bookmarks, history, and a player." />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#14120e" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314120e'/%3E%3Cpath d='M11 8h7a6 6 0 0 1 0 12h-3v4h-4z' fill='%23e2b15a'/%3E%3Cpath d='M15 12h3a2 2 0 0 1 0 4h-3z' fill='%2314120e'/%3E%3C/svg%3E" />
+    <title>Portal</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="top">
+      <a class="brand" href="#/">Portal</a>
+      <nav aria-label="Main">
+        <a href="#/">Home</a>
+        <a href="#/watchlist">Watchlist</a>
+        <a href="#/bookmarks">Bookmarks</a>
+        <a href="#/history">History</a>
+        <a href="#/source">Source</a>
+        <a href="#/server">Server</a>
+      </nav>
+      <div class="head-tools">
+        <div class="theme-picker">
+          <button type="button" id="theme-button" aria-haspopup="listbox" aria-expanded="false" aria-label="Theme">Theme</button>
+          <div id="theme-menu" class="theme-menu" role="listbox" aria-label="Themes" hidden></div>
+        </div>
+        <a id="update-pill" class="update-pill" href="#/server" hidden>Update available</a>
+        <span id="chip" class="chip">…</span>
+      </div>
+      <section id="activity" class="activity" hidden>
+        <div class="activity-head">
+          <h2 id="activity-title"></h2>
+          <span id="activity-percent" class="activity-percent" hidden></span>
+        </div>
+        <p id="activity-detail" class="activity-detail" aria-live="polite"></p>
+        <div id="activity-meter" class="activity-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Progress">
+          <span id="activity-fill"></span>
+        </div>
+        <div class="activity-actions">
+          <button type="button" id="activity-cancel" hidden>Cancel</button>
+        </div>
+      </section>
+    </header>
+    <p id="notice" class="notice" role="status" hidden></p>
+    <main id="main" tabindex="-1"></main>
+    <footer id="dock" class="dock">
+      <div id="dock-theater-side" class="theater-side" hidden>
+        <button type="button" id="dock-episodes-tab" class="theater-tab" aria-expanded="true" aria-controls="dock-episodes" title="Hide episodes">
+          <svg class="when-open" viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M14 6l-6 6 6 6" /></svg>
+          <svg class="when-closed" viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M10 6l6 6-6 6" /></svg>
+          <span class="theater-tab-label">Episodes</span>
+        </button>
+        <aside id="dock-episodes" class="theater-episodes is-open" aria-label="Episodes">
+          <div class="theater-episodes-head">
+            <p id="dock-episodes-show" class="theater-show"></p>
+            <h3 id="dock-episodes-heading">Episodes</h3>
+          </div>
+          <div id="dock-episodes-seasons" class="theater-seasons" role="tablist" aria-label="Seasons"></div>
+          <div id="dock-episodes-list" class="theater-ep-list"></div>
+        </aside>
+      </div>
+      <div id="dock-stage" class="stage player-stage is-idle">
+        <video id="player-video" playsinline></video>
+        <div class="stage-cast" id="dock-stage-cast" aria-hidden="true">
+          <span id="dock-stage-cast-lead">Playing on</span>
+          <strong id="dock-stage-cast-name"></strong>
+        </div>
+        <div class="stage-top" aria-hidden="true">
+          <span id="dock-stage-title"></span>
+        </div>
+        <div class="stage-center" id="dock-center">
+          <div class="stage-spinner" aria-hidden="true"></div>
+          <button type="button" class="stage-play" id="dock-big-play" aria-label="Play" tabindex="-1">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" /></svg>
+          </button>
+          <p class="stage-status" id="dock-stage-status" aria-hidden="true"></p>
+          <button type="button" class="stage-cancel" id="dock-stage-cancel" hidden>Cancel</button>
+        </div>
+        <div class="upnext" id="dock-upnext" role="region" aria-label="Up next" hidden>
+          <span class="upnext-label">Up next</span>
+          <strong id="dock-upnext-title"></strong>
+          <div class="upnext-actions">
+            <button type="button" id="dock-upnext-play">Play now</button>
+            <button type="button" id="dock-upnext-dismiss" class="icon-btn" aria-label="Dismiss" title="Dismiss">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M6 6l12 12M18 6L6 18" /></svg>
+            </button>
+          </div>
+        </div>
+        <div class="chrome player-chrome" id="dock-chrome">
+          <div class="scrub" id="dock-scrub">
+            <input id="dock-bar" class="seek-bar" type="range" min="0" max="0" step="1" value="0" aria-label="Time" disabled />
+            <span id="dock-hover" class="scrub-tip" hidden></span>
+          </div>
+          <div class="chrome-row">
+            <button type="button" id="dock-play" class="icon-btn" aria-label="Play" title="Play (k)">
+              <svg class="when-paused" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z" /></svg>
+              <svg class="when-playing" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 5.5h3v13h-3zM13.5 5.5h3v13h-3z" /></svg>
+            </button>
+            <button type="button" id="dock-back" class="icon-btn" aria-label="Back 10 seconds" title="Back 10 seconds (j)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3M4.5 4.5v3.7h3.7" /><text x="12" y="15.6">10</text></svg>
+            </button>
+            <button type="button" id="dock-forward" class="icon-btn" aria-label="Forward 10 seconds" title="Forward 10 seconds (l)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v3.7h-3.7" /><text x="12" y="15.6">10</text></svg>
+            </button>
+            <div class="volume">
+              <button type="button" id="dock-mute" class="icon-btn" aria-label="Mute" title="Mute (m)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" /><path class="line when-sound" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11" /><path class="line when-muted" d="M16 9.5l5 5M21 9.5l-5 5" /></svg>
+              </button>
+              <input id="dock-volume" class="volume-bar" type="range" min="0" max="1" step="0.05" value="1" aria-label="Volume, 100%" aria-valuetext="100%" />
+            </div>
+            <span class="clock"><span id="dock-elapsed" class="clock-now">0:00</span><span class="clock-sep" aria-hidden="true">/</span><span id="dock-total">0:00</span></span>
+            <span class="chrome-gap"></span>
+            <div class="dock-subs" id="dock-subs-wrap">
+              <button type="button" id="dock-subs" class="icon-btn" disabled aria-pressed="false" aria-label="Subtitles off" title="Subtitles off (c)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect class="line" x="3" y="5.5" width="18" height="13" rx="2" /><path class="line" d="M10.5 10.3a2.2 2.2 0 1 0 0 3.4M17 10.3a2.2 2.2 0 1 0 0 3.4" /></svg>
+              </button>
+              <button type="button" id="dock-subs-more" class="icon-btn subs-more" disabled aria-haspopup="menu" aria-expanded="false" aria-controls="dock-subs-menu" aria-label="Subtitle options" title="Subtitle options">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M7 14.5l5-5 5 5" /></svg>
+              </button>
+              <div id="dock-subs-menu" class="dock-subs-menu" role="menu" aria-label="Subtitles" hidden></div>
+            </div>
+            <button type="button" id="dock-pip" class="icon-btn" aria-label="Picture in picture" title="Picture in picture" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect class="line" x="3" y="5" width="18" height="14" rx="2" /><rect x="12" y="11.5" width="7" height="5.5" rx="1" /></svg>
+            </button>
+            <button type="button" id="dock-theater" class="icon-btn" aria-label="Theater mode" title="Theater mode (t)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect class="line" x="2" y="6.5" width="20" height="11" rx="2" /><path class="line" d="M6 6.5v11M2 10h4" /></svg>
+            </button>
+            <button type="button" id="dock-full" class="icon-btn" aria-label="Fullscreen" title="Fullscreen (f)">
+              <svg class="when-windowed" viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
+              <svg class="when-full" viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5" /></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="dock-side">
+        <div class="dock-head">
+          <div class="dock-titles">
+            <h2 id="dock-title"></h2>
+            <p id="dock-episode"></p>
+          </div>
+          <div class="dock-save" role="group" aria-label="This title">
+            <button type="button" id="dock-watchlist" class="icon-btn save-btn" data-saved-list="watchlist" aria-label="Watchlist" aria-pressed="false" disabled>
+              <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path class="line when-off" d="M4.5 7h11M4.5 12h11M4.5 17h6.5M17.5 14v7M14 17.5h7" /><path class="line when-on" d="M4.5 7h15M4.5 12h15M4.5 17h6.5M14 17.6l2.4 2.4 4.1-4.6" /></svg>
+            </button>
+            <button type="button" id="dock-bookmark" class="icon-btn save-btn" data-saved-list="bookmarks" aria-label="Bookmark" aria-pressed="false" disabled>
+              <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path class="line when-off" d="M7 4.5h10v15.2l-5-3.7-5 3.7z" /><path class="fill when-on" d="M7 4.5h10v15.2l-5-3.7-5 3.7z" /></svg>
+            </button>
+            <button type="button" id="dock-info" class="icon-btn info-btn" aria-label="Info" aria-haspopup="dialog" title="Info" disabled>
+              <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle class="line" cx="12" cy="12" r="8.6" /><path class="line" d="M12 11v5.2" /><circle cx="12" cy="7.9" r="1.15" /></svg>
+            </button>
+          </div>
+          <button type="button" id="dock-close" class="icon-btn" aria-label="Close player" title="Close player">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path class="line" d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+        <p id="dock-status" aria-live="polite"></p>
+        <div class="dock-controls">
+          <button type="button" id="dock-next" class="primary" disabled title="Next episode">Next episode</button>
+          <div class="dock-cast" id="dock-cast-wrap">
+            <button type="button" id="dock-cast" disabled aria-haspopup="menu" aria-expanded="false" aria-controls="dock-cast-menu" title="Cast">Cast</button>
+            <div id="dock-cast-menu" class="dock-cast-menu" role="menu" aria-label="Cast" hidden></div>
+          </div>
+          <button type="button" id="dock-links" disabled title="Links unavailable">Choose source</button>
+        </div>
+        <div class="dock-controls dock-prefs">
+          <label class="dock-field">Quality
+            <select id="dock-quality">
+              <option value="auto">Auto</option>
+              <option value="source">Source</option>
+              <option value="2160">4K</option>
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+              <option value="480">480p</option>
+            </select>
+          </label>
+          <label class="dock-field">Audio
+            <select id="dock-audio" disabled>
+              <option value="">Audio</option>
+            </select>
+          </label>
+          <label class="dock-field check"><input type="checkbox" id="dock-auto" checked /> Autoplay next</label>
+        </div>
+      </div>
+    </footer>
+    <div id="prompt" class="prompt"></div>
+    <script src="/vendor/hls.min.js"></script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

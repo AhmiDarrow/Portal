@@ -1,0 +1,4 @@
+# Portal's programs carry the C runtime inside them, so they start on a new PC
+# that has no Visual C++ Redistributable installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -1,0 +1,7 @@
+* text=auto
+# Windows runs these, and a batch file with bare line feeds can lose its place.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.iss text eol=crlf
+*.ico binary
+web/vendor/*.min.js -diff

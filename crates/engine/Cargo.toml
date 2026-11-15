@@ -1,0 +1,23 @@
+[package]
+name = "portal-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+portal-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+reqwest.workspace = true
+quick-xml.workspace = true
+zip.workspace = true
+flate2.workspace = true
+windows-sys.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
