@@ -44,6 +44,9 @@ const CLASS: &str = "PortalTray";
 const MUTEX: &str = r"Local\PortalTray";
 /// Asks a running tray to exit without touching the service.
 const EXIT_MESSAGE: &str = "PortalTrayExit";
+/// Asks a running tray to restart the service, as its menu does. The
+/// dashboard asks first, so the tray does not ask again.
+const RESTART_MESSAGE: &str = "PortalTrayRestart";
 const WM_TRAY: u32 = WM_APP + 1;
 const WM_WORKER: u32 = WM_APP + 2;
 const ICON_ID: u32 = 1;
@@ -66,6 +69,7 @@ const UPDATE_HINT: &str = "Right-click the Portal icon and choose Install update
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 static EXIT_REQUEST: AtomicU32 = AtomicU32::new(0);
+static RESTART_REQUEST: AtomicU32 = AtomicU32::new(0);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -155,6 +159,25 @@ pub fn claim_instance() -> Option<Instance> {
     Some(Instance(handle))
 }
 
+/// Asks a running tray from this install folder to restart the service.
+/// False when there is none to ask.
+pub fn request_restart() -> bool {
+    let class = wide(CLASS);
+    // SAFETY: the class name is NUL-terminated; no window title filter.
+    let hwnd = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
+    if hwnd.is_null() {
+        return false;
+    }
+    let mut pid = 0u32;
+    // SAFETY: hwnd came from FindWindowW; pid is a valid out pointer.
+    unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+    if !crate::service::in_our_folder(pid) {
+        return false;
+    }
+    // SAFETY: posting to another process's window with no pointers attached.
+    unsafe { PostMessageW(hwnd, register_message(RESTART_MESSAGE), 0, 0) != 0 }
+}
+
 /// Asks a running tray to exit without stopping the service, and waits for
 /// its process to end. `Ok(false)` when no tray is running.
 pub fn close_running(wait: Duration) -> Result<bool, String> {
@@ -210,6 +233,7 @@ pub fn run(open_browser: bool) -> Result<(), String> {
     let port = service::port();
     TASKBAR_CREATED.store(register_message("TaskbarCreated"), Ordering::Relaxed);
     EXIT_REQUEST.store(register_message(EXIT_MESSAGE), Ordering::Relaxed);
+    RESTART_REQUEST.store(register_message(RESTART_MESSAGE), Ordering::Relaxed);
     let hwnd = create_window()?;
     let (events, receiver) = channel();
     let mut model = Model::new(port);
@@ -296,6 +320,7 @@ fn create_window() -> Result<HWND, String> {
         for message in [
             TASKBAR_CREATED.load(Ordering::Relaxed),
             EXIT_REQUEST.load(Ordering::Relaxed),
+            RESTART_REQUEST.load(Ordering::Relaxed),
         ] {
             ChangeWindowMessageFilterEx(hwnd, message, MSGFLT_ALLOW, std::ptr::null_mut());
         }
@@ -364,6 +389,9 @@ unsafe extern "system" fn window_proc(
         // WM_CLOSE comes from Restart Manager; the exit request from `--stop`.
         WM_CLOSE => exit_quietly(),
         _ if registered(&EXIT_REQUEST, msg) => exit_quietly(),
+        _ if registered(&RESTART_REQUEST, msg) => {
+            with_app(|app| app.start(Job::Restarting, true, false));
+        }
         _ if registered(&TASKBAR_CREATED, msg) => {
             with_app(|app| {
                 app.icon_shown = false;

@@ -27,7 +27,12 @@ const TRAY_EXIT_WAIT: Duration = Duration::from_secs(10);
 
 const HELP: &str = "portal-launcher                 start Portal, open the dashboard, and stay in the tray\n\
                     portal-launcher --no-browser    start Portal in the tray without opening a browser\n\
-                    portal-launcher --stop          quit the tray and stop Portal (--quiet: no messages)";
+                    portal-launcher --stop          quit the tray and stop Portal (--quiet: no messages)\n\
+                    portal-launcher --restart-server            restart the Portal server\n\
+                    portal-launcher --autostart on|off|status   start with Windows (status exits 3 when off)";
+
+/// Exit code of `--autostart status` when Portal does not start with Windows.
+const AUTOSTART_OFF: i32 = 3;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,6 +43,18 @@ fn main() {
         Ok(())
     } else if flag("--stop") {
         stop(quiet)
+    } else if flag("--restart-server") {
+        restart_server()
+    } else if let Some(mode) = args
+        .iter()
+        .position(|arg| arg == "--autostart")
+        .map(|at| args.get(at + 1).map(String::as_str).unwrap_or(""))
+    {
+        // The dashboard asks without a window to show a message in.
+        match set_autostart(mode) {
+            Ok(code) => std::process::exit(code),
+            Err(_) => std::process::exit(1),
+        }
     } else {
         launch(!flag("--no-browser"))
     };
@@ -84,6 +101,27 @@ fn open_existing(open_browser: bool) -> Result<(), String> {
         ui::open(&service::dashboard_url(port));
     }
     Ok(())
+}
+
+/// The dashboard's "Start with Windows": turns it on or off, or answers
+/// which it is through the exit code.
+fn set_autostart(mode: &str) -> Result<i32, String> {
+    match mode {
+        "on" => autostart::set(true).map(|()| 0),
+        "off" => autostart::set(false).map(|()| 0),
+        "status" => Ok(if autostart::enabled() { 0 } else { AUTOSTART_OFF }),
+        _ => Err("--autostart takes on, off or status.".into()),
+    }
+}
+
+/// Restarts the server: through the running tray, which owns it, or directly
+/// when no tray runs.
+fn restart_server() -> Result<(), String> {
+    #[cfg(windows)]
+    if tray::request_restart() {
+        return Ok(());
+    }
+    service::restart(service::port())
 }
 
 /// Ends the tray first, so it does not restart the service, then stops the

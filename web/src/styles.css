@@ -516,6 +516,54 @@ main > p { max-width: 68ch; }
 .rename input { flex: 1 1 8rem; width: auto; min-width: 0; }
 
 .theme-picker { position: relative; }
+.brand-wrap { position: relative; display: inline-flex; }
+.app-menu {
+  position: absolute;
+  top: calc(100% + 0.6rem);
+  left: 0;
+  z-index: 6;
+  width: 17.5rem;
+  max-height: min(80vh, 34rem);
+  overflow: auto;
+  padding: 0.4rem;
+  background: color-mix(in srgb, var(--raised) 94%, var(--bg));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.app-menu[hidden] { display: none; }
+.app-menu hr { border: 0; border-top: 1px solid var(--line); margin: 0.3rem 0.2rem; }
+.app-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+}
+.app-item:focus-visible { outline-offset: -2px; }
+.app-item[role="menuitemcheckbox"] { padding-left: 0.5rem; }
+.app-check { flex: 0 0 1rem; color: var(--gold); text-align: center; }
+.app-head {
+  margin: 0.45rem 0.6rem 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.app-status { margin: 0.1rem 0.6rem; color: var(--muted); font-size: 0.9rem; }
+.app-note {
+  margin: 0.3rem 0.6rem 0.2rem;
+  min-height: 1.2rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.app-note:empty { display: none; }
+
 #theme-button {
   max-width: 12rem;
   overflow: hidden;

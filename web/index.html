@@ -13,7 +13,10 @@
   <body>
     <a class="skip" href="#main">Skip to content</a>
     <header class="top">
-      <a class="brand" href="#/">Portal</a>
+      <div class="brand-wrap">
+        <a class="brand" href="#/" aria-haspopup="menu" aria-expanded="false">Portal</a>
+        <div id="app-menu" class="app-menu" role="menu" aria-label="Portal" hidden></div>
+      </div>
       <nav aria-label="Main">
         <a href="#/">Home</a>
         <a href="#/watchlist">Watchlist</a>

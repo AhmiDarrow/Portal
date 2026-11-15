@@ -47,6 +47,7 @@ import {
   type UpdateInfo,
 } from "./api";
 import { awaitAddonPrompts, mount, play, type PlayTarget } from "./player";
+import { wireAppMenu } from "./appmenu";
 import { syncCast } from "./cast";
 import { plainSettingLabel, settingsAddon } from "./settings-link";
 import { mountThemes } from "./themes";
@@ -3402,6 +3403,7 @@ function isRemote(): boolean {
 
 function startApp(): void {
   appStarted = true;
+  wireAppMenu(() => !isRemote());
   if (isRemote()) {
     // Settings live on the PC; this device only watches and casts.
     document.body.classList.add("remote");

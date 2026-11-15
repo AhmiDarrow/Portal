@@ -594,6 +594,11 @@ export const api = {
   window: (visible: boolean) => send<Status>("/api/engine/window", jsonInit("POST", { visible })),
   castInfo: () => send<CastInfo>("/api/cast"),
   setCastLan: (lan: boolean) => send<CastInfo>("/api/cast", jsonInit("PUT", { lan })),
+  app: () => send<AppInfo>("/api/app"),
+  appAutostart: (on: boolean) => send<AppInfo>("/api/app/autostart", jsonInit("POST", { on })),
+  appRestart: () => send<{ ok: boolean }>("/api/app/restart", jsonInit("POST")),
+  appQuit: () => send<{ ok: boolean }>("/api/app/quit", jsonInit("POST")),
+  appLogs: () => send<{ ok: boolean }>("/api/app/logs", jsonInit("POST")),
   castPresence: (id: string, name: string) =>
     send<{ ok: boolean }>("/api/cast/presence", jsonInit("POST", { id, name })),
   castReceivers: () => send<{ items: CastReceiver[] }>("/api/cast/receivers"),
@@ -884,6 +889,14 @@ function decodeFolderPart(part: string): string {
     return part;
   }
 }
+
+/** What the tray program can do for the dashboard on this PC. */
+export type AppInfo = {
+  /** False when the tray program is not installed beside the server. */
+  tray: boolean;
+  /** Whether Portal starts with Windows; absent when unknown. */
+  autostart?: boolean;
+};
 
 export type CastInfo = {
   lan: boolean;

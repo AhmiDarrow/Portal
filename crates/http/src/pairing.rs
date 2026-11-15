@@ -331,6 +331,7 @@ fn remote_may(method: &Method, path: &str) -> bool {
     match (method, parts.as_slice()) {
         // Reads, except settings forms and add-on management.
         (&Method::GET | &Method::HEAD, ["api", "addons", _, "settings"])
+        | (&Method::GET | &Method::HEAD, ["api", "app"])
         | (&Method::GET | &Method::HEAD, ["api", "package-install"])
         | (&Method::GET | &Method::HEAD, ["api", "repos", ..])
         | (&Method::GET | &Method::HEAD, ["api", "metadata"])
