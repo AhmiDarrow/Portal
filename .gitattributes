@@ -6,3 +6,5 @@
 *.ico binary
 web/vendor/*.min.js -diff
 *.woff2 binary
+*.jpg binary
+*.png binary

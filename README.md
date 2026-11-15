@@ -4,6 +4,14 @@ Portal turns a Kodi video add-on into a dashboard in your browser. You get conti
 
 Kodi runs in the background as the engine. It resolves the add-on's items, ffmpeg turns the stream into HLS, and the page plays it. You never see a Kodi window. Your watch state belongs to Portal, not to Kodi's library, and Portal works with any Kodi video add-on you pick.
 
+![The player on a browse page](docs/player.jpg)
+
+| Home | The Portal menu | A light theme |
+| --- | --- | --- |
+| ![Home, with continue watching and the watchlist](docs/home.jpg) | ![The menu behind the Portal name](docs/menu.jpg) | ![A browse page in the Light theme](docs/light.jpg) |
+
+The films in these pictures are the Blender Foundation's open movies, shown with a demo add-on: Big Buck Bunny, Sintel, Tears of Steel and Elephants Dream, © Blender Foundation, [CC BY](https://creativecommons.org/licenses/by/3.0/).
+
 Portal runs on 64-bit Windows 10 and 11. It comes with no add-ons and no video: you choose the add-on, and its accounts and settings stay yours.
 
 ## Install
