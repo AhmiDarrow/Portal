@@ -11,10 +11,7 @@ export type ThemeId =
   | "purple"
   | "alien"
   | "orange"
-  | "cyan"
-  | "deutan"
-  | "protan"
-  | "tritan";
+  | "cyan";
 
 type Kind = "dark" | "light";
 
@@ -62,9 +59,6 @@ const PALETTES: Record<Palette["id"], Palette> = {
   alien: palette("alien", "Dark Purple", "dark", "#07040f", "#0f081a", "#1a0f2e", "#3b1d66", "#b026ff", "#f2e8ff", "#c4a0e8", "#ff6b9d"),
   orange: palette("orange", "Amber", "dark", "#14100a", "#1f1810", "#2e2418", "#4a3a24", "#fb923c", "#efe6da", "#c4a88a", "#fca5a5"),
   cyan: palette("cyan", "Ocean", "dark", "#0a1216", "#0f1c22", "#163038", "#1e4a55", "#22d3ee", "#d8eef2", "#8fb8c2", "#fca5a5"),
-  deutan: palette("deutan", "Colorblind Deutan", "dark", "#0b0f14", "#121821", "#1a2330", "#2c3a4a", "#1d7fc4", "#e9f0f6", "#a9b9c7", "#d9601c"),
-  protan: palette("protan", "Colorblind Protan", "dark", "#0d1013", "#151a1f", "#1e252c", "#303a44", "#0f8f75", "#eef1f4", "#adb8c2", "#f0803a"),
-  tritan: palette("tritan", "Colorblind Tritan", "dark", "#12100f", "#1b1817", "#262120", "#3a3231", "#d63a72", "#f3efee", "#c0b6b3", "#cf3b30"),
 };
 
 export type ThemeChoice = {
@@ -84,9 +78,6 @@ export const themeMenu: ThemeChoice[] = [
   { id: "light", name: "Light", swatch: PALETTES.light.accent },
   { id: "orange", name: "Amber", swatch: PALETTES.orange.accent },
   { id: "purple", name: "Amethyst", swatch: PALETTES.purple.accent },
-  { id: "deutan", name: "Colorblind Deutan", swatch: PALETTES.deutan.accent },
-  { id: "protan", name: "Colorblind Protan", swatch: PALETTES.protan.accent },
-  { id: "tritan", name: "Colorblind Tritan", swatch: PALETTES.tritan.accent },
   { id: "green", name: "Emerald", swatch: PALETTES.green.accent },
   { id: "cyan", name: "Ocean", swatch: PALETTES.cyan.accent },
   { id: "dark", name: "Dark", swatch: PALETTES.dark.accent },
