@@ -318,6 +318,21 @@ def open_cast(
 
 
 def close_cast(cast: Any) -> None:
+    """Drops the connection without saying goodbye to the receiver.
+
+    Some TVs close the receiver, and the video with it, when the last sender
+    connected to it says goodbye. One that just goes away leaves it playing.
+    """
+    client = getattr(cast, "socket_client", None)
+    lock = getattr(client, "_socket_lock", None)
+    channels = getattr(client, "_open_channels", None)
+    if lock is not None and isinstance(channels, list):
+        try:
+            # The goodbye goes to each channel on this list.
+            with lock:
+                channels.clear()
+        except Exception:
+            pass
     try:
         cast.disconnect(timeout=2)
     except Exception:
@@ -497,6 +512,12 @@ def do_subtitles(cast: Any, subtitles: tuple[str, str] | None, timeout: float) -
     mc = media_controller(cast, timeout)
     status = getattr(mc, "status", None)
     url = str(getattr(status, "content_id", None) or "")
+    if not url:
+        # The first status after connecting can name the session and not
+        # what it plays. Asked directly, the TV says.
+        refresh_status(cast, 3.0)
+        status = getattr(mc, "status", None)
+        url = str(getattr(status, "content_id", None) or "")
     if not url:
         fail("Nothing is playing on the TV.", "not_found")
     if subtitles is None:
