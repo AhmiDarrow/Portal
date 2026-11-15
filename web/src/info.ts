@@ -1,6 +1,6 @@
 /** The Info dialog: shows what is known at once, then what an online lookup adds. */
 import { api, artUrl, type MediaInfo, type MediaLink } from "./api";
-import { webUrl } from "./html";
+import { PAGE_LOCALE, webUrl } from "./html";
 import { savedButton, type SaveTitle } from "./saved";
 import { episodeCode } from "./titles";
 
@@ -242,12 +242,12 @@ function aired(value: string | null | undefined): string {
   if (!value || !/^\d{4}-\d{2}-\d{2}/.test(value)) return "";
   const date = new Date(value.slice(0, 10) + "T12:00:00");
   if (Number.isNaN(date.getTime())) return "";
-  return "Aired " + date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return "Aired " + date.toLocaleDateString(PAGE_LOCALE, { year: "numeric", month: "short", day: "numeric" });
 }
 
 function votes(count: number | null | undefined): string {
   if (typeof count !== "number" || !Number.isFinite(count) || count <= 0) return "";
-  const text = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(count);
+  const text = new Intl.NumberFormat(PAGE_LOCALE, { notation: "compact", maximumFractionDigits: 1 }).format(count);
   return `${text} ${count === 1 ? "vote" : "votes"}`;
 }
 

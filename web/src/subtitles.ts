@@ -11,6 +11,7 @@ import {
   type SubtitleSettings,
   type SubtitleTrack,
 } from "./api";
+import { PAGE_LOCALE } from "./html";
 
 /** Languages offered on the Server page, by code as the service knows them. */
 export const COMMON_LANGUAGES: ReadonlyArray<readonly [string, string]> = [
@@ -67,6 +68,23 @@ export function primaryLanguage(tag: string | null | undefined): string {
   if (!text) return "";
   const primary = text.split("-")[0] ?? "";
   return THREE_LETTER[primary] ?? primary;
+}
+
+/**
+ * A track's language as a BCP 47 tag for `srclang`: videos label tracks with
+ * three-letter codes such as "eng" or "ger", which become "en" and "de".
+ * Empty for "und" (undetermined) or anything that is not a language tag.
+ */
+export function trackLanguage(tag: string | null | undefined): string {
+  const text = (tag ?? "").trim().replace(/_/g, "-");
+  if (!/^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(text)) return "";
+  const [first, ...rest] = text.split("-");
+  const primary = primaryLanguage(first);
+  if (!primary || primary === "und" || primary === "mul" || primary === "zxx") return "";
+  const subtags = rest.map((part) =>
+    part.length === 2 ? part.toUpperCase() : part.length === 4 ? part[0].toUpperCase() + part.slice(1).toLowerCase() : part.toLowerCase(),
+  );
+  return [primary, ...subtags].join("-");
 }
 
 /**
@@ -256,7 +274,7 @@ export function languageName(code: string): string {
     const primary = primaryLanguage(text);
     const region = text.split("-")[1];
     const query = region && primary.length === 2 ? primary + "-" + region : primary;
-    const name = new Intl.DisplayNames(undefined, { type: "language" }).of(query);
+    const name = new Intl.DisplayNames(PAGE_LOCALE, { type: "language" }).of(query);
     return name && name.toLowerCase() !== code.toLowerCase() ? name : "";
   } catch {
     return "";

@@ -41,6 +41,7 @@ import {
   searchFor,
   startupAudioLanguage,
   subtitleSettings,
+  trackLanguage,
   trackName,
 } from "./subtitles";
 
@@ -862,7 +863,8 @@ function applySubtitleMode(): void {
       const node = document.createElement("track");
       node.kind = "subtitles";
       node.label = item ? candidateTitle(item) : "Subtitles";
-      if (item?.language) node.srclang = item.language;
+      const srclang = trackLanguage(item?.language);
+      if (srclang) node.srclang = srclang;
       node.src = url;
       node.default = true;
       node.dataset.online = "1";
@@ -989,7 +991,8 @@ function fillSubtitles(tracks: SubtitleTrack[]): void {
     const node = document.createElement("track");
     node.kind = "subtitles";
     node.label = trackName(track);
-    if (track.lang) node.srclang = track.lang;
+    const srclang = trackLanguage(track.lang);
+    if (srclang) node.srclang = srclang;
     node.src = track.url;
     node.addEventListener("load", () => placeCues(true), { once: true });
     media.appendChild(node);
