@@ -60,6 +60,7 @@ import {
   shiftCues,
   startupAudioLanguage,
   subtitleSettings,
+  trackLanguage,
   trackName,
   languageName,
 } from "./subtitles";
@@ -1341,7 +1342,8 @@ function attachTrack(src: string, label: string, lang: string, key: string, blob
   const node = document.createElement("track");
   node.kind = "subtitles";
   node.label = label || "Subtitles";
-  if (lang) node.srclang = lang;
+  const srclang = trackLanguage(lang);
+  if (srclang) node.srclang = srclang;
   node.src = src;
   node.default = true;
   node.addEventListener("load", () => {

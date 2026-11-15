@@ -53,7 +53,7 @@ import { plainSettingLabel, settingsAddon } from "./settings-link";
 import { mountThemes } from "./themes";
 import { showPairing } from "./pair";
 import { cleanEpisodeTitle, episodeCode } from "./titles";
-import { esc } from "./html";
+import { PAGE_LOCALE, esc } from "./html";
 import { COMMON_LANGUAGES, browserLanguages, cleanSubtitleSettings, rememberSubtitleSettings } from "./subtitles";
 import { openInfo, runtime } from "./info";
 import {
@@ -1087,7 +1087,7 @@ function airedOn(value: string | null | undefined): string {
   if (!value || !/^\d{4}-\d{2}-\d{2}/.test(value)) return "";
   const date = new Date(value.slice(0, 10) + "T12:00:00");
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return date.toLocaleDateString(PAGE_LOCALE, { year: "numeric", month: "short", day: "numeric" });
 }
 
 /** Centers the current season tab, scrolls to the episode a show address meant, and catches up on progress. */
@@ -1685,7 +1685,7 @@ async function renderHistory(token: number): Promise<void> {
 }
 
 function historyRow(entry: HistoryEntry): string {
-  const when = entry.at ? new Date(entry.at).toLocaleString() : "";
+  const when = entry.at ? new Date(entry.at).toLocaleString(PAGE_LOCALE) : "";
   const code = episodeCode(entry.season, entry.episode);
   const state = entry.finished ? "Watched" : "";
   const resume = !entry.finished ? resumeOf(entry.position) : undefined;
@@ -2682,7 +2682,7 @@ function devicesSection(): string {
   const busy = pairBusy ? " disabled" : "";
   const rows = serverDevices
     .map((device) => {
-      const seen = device.last_seen ? new Date(device.last_seen).toLocaleString() : "";
+      const seen = device.last_seen ? new Date(device.last_seen).toLocaleString(PAGE_LOCALE) : "";
       const facts = [device.address, seen ? `last seen ${seen}` : ""].filter(Boolean).join(" · ");
       return `<div class="row"><span>${esc(device.name)} <span class="muted">${esc(facts)}</span></span><button type="button" data-act="${act(() => void removeDevice(device))}"${busy}>Remove</button></div>`;
     })
