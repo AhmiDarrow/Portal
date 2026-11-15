@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::service::{Health, Probe, Update};
+use crate::service::{EncoderChoice, Health, Probe, Update};
 
 /// A service that dies on its own is restarted at most this often.
 const RESTARTS: usize = 3;
@@ -28,10 +28,11 @@ pub enum Cmd {
     OpenLogs,
     ToggleAutostart,
     Quit,
+    ToggleEncoder,
 }
 
 impl Cmd {
-    const ALL: [Cmd; 11] = [
+    const ALL: [Cmd; 12] = [
         Cmd::Open,
         Cmd::InstallUpdate,
         Cmd::ToggleLan,
@@ -43,6 +44,7 @@ impl Cmd {
         Cmd::OpenLogs,
         Cmd::ToggleAutostart,
         Cmd::Quit,
+        Cmd::ToggleEncoder,
     ];
 
     pub fn id(self) -> usize {
@@ -172,6 +174,7 @@ pub struct Model {
     pub service: Service,
     pub engine: Option<String>,
     pub lan: Option<bool>,
+    pub encoder: Option<EncoderChoice>,
     pub update: Option<Update>,
     pub job: Option<Job>,
     pub autostart: bool,
@@ -192,6 +195,7 @@ impl Model {
             service: Service::Unknown,
             engine: None,
             lan: None,
+            encoder: None,
             update: None,
             job: None,
             autostart: false,
@@ -280,6 +284,7 @@ impl Model {
                 self.service = Service::Running;
                 self.engine = health.engine;
                 self.lan = health.lan;
+                self.encoder = health.encoder;
                 self.update = health.update;
                 self.gave_up = false;
             }
@@ -416,6 +421,9 @@ impl Model {
                 update.current
             ))));
         }
+        if let Some(encoder) = self.encoder.as_ref().filter(|_| self.running()) {
+            items.push(Entry::Item(Item::status(encoder_line(encoder))));
+        }
         items.push(Entry::Separator);
         items.push(Entry::Item(
             Item::new(
@@ -424,6 +432,15 @@ impl Model {
                 ready && self.lan.is_some(),
             )
             .checked(self.lan == Some(true)),
+        ));
+        let card = self.encoder.as_ref().and_then(|e| card_name(&e.card));
+        items.push(Entry::Item(
+            Item::new(
+                Cmd::ToggleEncoder,
+                "Encode video on the graphics card",
+                ready && card.is_some(),
+            )
+            .checked(card.is_some() && self.encoder.as_ref().is_some_and(|e| e.hardware)),
         ));
         items.push(Entry::Item(Item::new(
             Cmd::RestartEngine,
@@ -460,6 +477,25 @@ impl Model {
             true,
         )));
         items
+    }
+}
+
+/// The maker of a graphics card Portal can encode with, as people know it.
+fn card_name(card: &str) -> Option<&'static str> {
+    match card {
+        "nvidia" => Some("NVIDIA"),
+        "intel" => Some("Intel"),
+        "amd" => Some("AMD"),
+        _ => None,
+    }
+}
+
+/// What encodes the video now, in words, as the dashboard's menu says it.
+fn encoder_line(encoder: &EncoderChoice) -> String {
+    match card_name(&encoder.card) {
+        None => "Video encoding: processor (no graphics card found for it)".to_string(),
+        Some(card) if encoder.hardware => format!("Video encoding: {card} graphics card"),
+        Some(_) => "Video encoding: processor".to_string(),
     }
 }
 

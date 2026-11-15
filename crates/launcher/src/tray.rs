@@ -35,7 +35,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use crate::autostart;
 use crate::model::{fill_wide, Cmd, Entry, Job, Model, Reaction, Service};
-use crate::service::{self, Health, LanReply, Update};
+use crate::service::{self, EncoderChoice, Health, LanReply, Update};
 use crate::ui::{self, wide};
 
 /// Window class of the hidden window. `--stop` finds a running tray by it.
@@ -86,6 +86,7 @@ enum Event {
         first: bool,
     },
     Lan(Result<LanReply, String>),
+    Encoder(Result<EncoderChoice, String>),
     Engine(Result<(), String>),
     Checked(Result<Update, String>),
     Install(Result<(), String>),
@@ -527,6 +528,9 @@ fn command(cmd: Cmd) {
         Cmd::ToggleLan => {
             with_app(App::toggle_lan);
         }
+        Cmd::ToggleEncoder => {
+            with_app(App::toggle_encoder);
+        }
         Cmd::RestartEngine => {
             with_app(App::restart_engine);
         }
@@ -665,7 +669,10 @@ fn handle(event: Event) {
                 with_app(|app| app.start(Job::Restarting, true, false));
             }
         }
-        Event::Lan(Err(message)) | Event::Engine(Err(message)) => {
+        Event::Encoder(Ok(choice)) => {
+            with_app(|app| app.model.encoder = Some(choice));
+        }
+        Event::Lan(Err(message)) | Event::Encoder(Err(message)) | Event::Engine(Err(message)) => {
             dialog(|| ui::alert(&message));
         }
         Event::Engine(Ok(())) => {
@@ -750,6 +757,16 @@ impl App {
         let port = self.model.port;
         self.poster
             .spawn(move || Event::Lan(service::set_lan(port, !lan)));
+    }
+
+    /// Takes effect with the next video started, like the dashboard's menu.
+    fn toggle_encoder(&mut self) {
+        let Some(hardware) = self.model.encoder.as_ref().map(|e| e.hardware) else {
+            return;
+        };
+        let port = self.model.port;
+        self.poster
+            .spawn(move || Event::Encoder(service::set_encoder(port, !hardware)));
     }
 
     fn restart_engine(&mut self) {

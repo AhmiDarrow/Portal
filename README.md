@@ -35,7 +35,8 @@ Every download is pinned to a version and checked against a SHA-256 hash. Runnin
 - **Portal** (desktop or Start menu) starts Portal in the background, opens the dashboard, and puts a Portal icon in the notification area next to the clock. If Portal is already running, it just opens the dashboard.
 - Closing the dashboard's browser tab doesn't stop Portal. Click the tray icon to open the dashboard again.
 - Right-click the tray icon for more:
-  - **Server** shows whether the server and the Kodi engine are running, and has **Allow TVs on this network**, **Encode video on the graphics card**, **Restart Kodi engine**, **Restart Portal server**, **Check for updates**, **Open server page**, and **Open log folder**. If the server stops on its own, Portal restarts it, up to three times in ten minutes.
+  - **Open Portal** opens the dashboard, and **Install update** appears when a new version is out.
+  - **Server** shows whether the server and the Kodi engine are running, which version you have and what encodes video, and has **Allow TVs on this network**, **Encode video on the graphics card**, **Restart Kodi engine**, **Restart Portal server** (**Start Portal server** if it has stopped), **Check for updates**, **Open server page**, and **Open log folder**. If the server stops on its own, Portal restarts it, up to three times in ten minutes.
   - **Start with Windows** starts Portal in the tray when you sign in, without opening a browser.
   - **Quit Portal** asks first, then stops the server. Anything playing or casting stops, and Kodi closes if Portal started it.
 - When a video has to be converted, Portal uses the PC's graphics card if it has one that works (NVIDIA, Intel or AMD), which leaves the processor nearly idle. It checks once, and goes back to the processor by itself if the card fails on a video. Untick **Encode video on the graphics card** in the menu to always use the processor; the choice applies to the next video you start.
@@ -51,7 +52,7 @@ Every download is pinned to a version and checked against a SHA-256 hash. Runnin
 
 ### Keyboard
 
-In the player: **Space** or **K** play/pause, **J**/**L** or **←**/**→** back/forward 10 seconds, **↑**/**↓** volume, **M** mute, **C** subtitles on or off, **F** fullscreen (or double-click the video), **N** next episode.
+In the player: **Space** or **K** play/pause, **J**/**L** or **←**/**→** back/forward 10 seconds, **↑**/**↓** volume, **M** mute, **C** subtitles on or off, **F** fullscreen (or double-click the video), **T** theater mode, **N** next episode, **Esc** leaves fullscreen or theater mode.
 
 ## Updates
 
@@ -70,6 +71,7 @@ Casting only works if TVs on your network can reach Portal, so by default Portal
 | `%LOCALAPPDATA%\Portal\prefs.json` | the player choices every screen shares (the dashboard, other browsers, a TV's cast page) |
 | `%LOCALAPPDATA%\Portal\cast.json` | whether TVs on your network may connect |
 | `%LOCALAPPDATA%\Portal\encoder.json` | whether the graphics card may convert video |
+| `%LOCALAPPDATA%\Portal\packs.json` | the whole-season file chosen for a show, so the next episode plays from the same one |
 | `%LOCALAPPDATA%\Portal\devices.json` | the devices you paired, each with a hash of its key (never the key itself) |
 | `%LOCALAPPDATA%\Portal\engine.json` | which Kodi process Portal started, so it only ever closes that one |
 | `%LOCALAPPDATA%\Portal\metadata.json` | the online lookup setting, and your TMDB key if you added one, encrypted for your Windows account |
@@ -80,7 +82,7 @@ Casting only works if TVs on your network can reach Portal, so by default Portal
 | `%LOCALAPPDATA%\Portal\updates` | installers downloaded by **Install update** |
 | `%LOCALAPPDATA%\Portal\staging` | add-ons unpacked here before they are copied into Kodi |
 | `%LOCALAPPDATA%\Portal\logs\portal.log` | the log of the current run (`portal.previous.log` is the one before) |
-| `%LOCALAPPDATA%\Portal\backups` | a copy of your library and settings, taken the first time a new version starts (the last 3 are kept) |
+| `%LOCALAPPDATA%\Portal\backups` | a copy of your library and settings, taken the first time a new version starts (the last 3 are kept, plus the newest one at least a week old) |
 | `%APPDATA%\Kodi` | Kodi's own profile. Portal reads it but never installs itself into it. Accounts you sign in to through an add-on are saved here, in that add-on's own settings |
 
 Updates replace only the program folder. Everything under `%LOCALAPPDATA%\Portal` and Kodi's profile stays as it is.
