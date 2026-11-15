@@ -69,6 +69,15 @@ function line(text: string): string {
   return `<p class="app-status">${esc(text)}</p>`;
 }
 
+const CARD_NAMES: Record<string, string> = { nvidia: "NVIDIA", intel: "Intel", amd: "AMD" };
+
+/** What encodes the video now, in words. */
+function encoderLine(encoder: NonNullable<AppInfo["encoder"]>): string {
+  const card = CARD_NAMES[encoder.card];
+  if (!card) return "Video encoding: processor (no graphics card found for it)";
+  return encoder.hardware ? `Video encoding: ${card} graphics card` : "Video encoding: processor";
+}
+
 function paint(): void {
   if (!menu) return;
   const { status, update, cast, app } = loaded;
@@ -80,8 +89,11 @@ function paint(): void {
   parts.push(line(`Server: running on port ${port}`));
   if (status) parts.push(line(`Kodi engine: ${status.state}${status.version ? ` (${status.version})` : ""}`));
   if (update) parts.push(line(`Version ${update.current}`));
+  if (app?.encoder) parts.push(line(encoderLine(app.encoder)));
   parts.push(`<hr />`);
   parts.push(item("lan", "Allow TVs on this network", cast !== null && tray, cast?.lan === true));
+  const card = app?.encoder ? CARD_NAMES[app.encoder.card] !== undefined : false;
+  parts.push(item("encoder", "Encode video on the graphics card", card, card && app?.encoder?.hardware === true));
   parts.push(item("engine", "Restart Kodi engine"));
   parts.push(item("restart", "Restart Portal server", tray));
   parts.push(item("check", "Check for updates", update !== null));
@@ -158,6 +170,13 @@ async function run(act: string): Promise<void> {
     } else if (act === "autostart") {
       loaded.app = await api.appAutostart(loaded.app?.autostart !== true);
       say(loaded.app.autostart ? "Portal starts with Windows." : "Portal no longer starts with Windows.");
+    } else if (act === "encoder") {
+      loaded.app = await api.appEncoder(loaded.app?.encoder?.hardware !== true);
+      say(
+        loaded.app.encoder?.hardware
+          ? "The graphics card encodes the next video you start."
+          : "The processor encodes the next video you start.",
+      );
     } else if (act === "lan") {
       if (!confirm(LAN_TEXT)) return;
       loaded.cast = await api.setCastLan(loaded.cast?.lan !== true);

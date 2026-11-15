@@ -390,6 +390,9 @@ pub(crate) trait Backend: Send + Sync {
     ) -> impl Future<Output = CastContinue> + Send {
         std::future::ready(CastContinue::Done)
     }
+    /// The device is `at` seconds into the file it was given. What follows
+    /// that file can be made ready here, before the device runs out.
+    fn ahead(&self, _watched: &Watched, _at: f64) {}
     fn progress(&self, report: &ProgressReport);
     fn publish(&self, gen: u64, update: Update);
 }
@@ -569,6 +572,9 @@ async fn observe<B: Backend>(
                 let active = matches!(status.state.as_str(), "PLAYING" | "PAUSED" | "BUFFERING");
                 if let (true, Some(at)) = (active, position) {
                     last = Some((at, duration));
+                }
+                if let (true, Some(at)) = (active, status.current_time) {
+                    backend.ahead(watched, at);
                 }
                 if ending.is_none() {
                     backend.publish(
@@ -829,11 +835,11 @@ async fn chain<B: Backend>(
     Ok(Watched {
         device: current.device.clone(),
         job_id,
-        media_url,
         origin: job
             .position
-            .filter(|at| at.is_finite() && *at >= 0.0)
+            .filter(|at| at.is_finite() && *at >= 0.0 && !super::is_cast_playlist(&media_url))
             .unwrap_or(0.0),
+        media_url,
         job_duration: job.duration,
         item: Some(item),
         next: job.next.clone(),

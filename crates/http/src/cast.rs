@@ -386,10 +386,23 @@ fn path_segment(id: &str) -> String {
 
 /// The address a TV loads `subtitle` from for `job`, timed to its stream,
 /// and the subtitle's language.
-fn subtitle_address(
+/// The address for the TV the job is cast to. A whole-title stream runs on
+/// the title's own clock, whatever place the job's own stream starts at.
+fn tv_subtitle_address(
+    player: &portal_engine::Player,
     base: &str,
     job: &portal_api::PlayJob,
     subtitle: &CastSubtitle,
+) -> Option<(String, String)> {
+    subtitle_address_in(base, job, subtitle, player.cast_session(&job.id).as_deref())
+}
+
+/// `whole` is the session of the job's whole-title stream, when the TV plays that.
+fn subtitle_address_in(
+    base: &str,
+    job: &portal_api::PlayJob,
+    subtitle: &CastSubtitle,
+    whole: Option<&str>,
 ) -> Option<(String, String)> {
     let lang = receiver_lang(subtitle.lang());
     match subtitle {
@@ -404,7 +417,11 @@ fn subtitle_address(
                     Some(code) if !untagged(code) => receiver_lang(Some(code)),
                     _ => lang,
                 };
-                (format!("{base}{}", track.url), lang)
+                let address = match whole {
+                    Some(session) => format!("{base}/media/{session}/sub{:05}.vtt", track.id),
+                    None => format!("{base}{}", track.url),
+                };
+                (address, lang)
             })
         }
         CastSubtitle::Online { id, .. } => {
@@ -414,7 +431,7 @@ fn subtitle_address(
             // Online files are shifted to the stream's start, like the dashboard's.
             let origin = job
                 .position
-                .filter(|at| at.is_finite() && *at > 0.0)
+                .filter(|at| at.is_finite() && *at > 0.0 && whole.is_none())
                 .unwrap_or(0.0);
             Some((
                 format!(
@@ -1364,7 +1381,6 @@ pub(super) async fn cast_device_play(
     };
     let url = cast_media_url(url).map_err(|msg| super::fail(StatusCode::BAD_REQUEST, msg))?;
     let url = toward_device(&state, endpoint.as_ref(), url);
-    let url = prepare_cast_media(&state.0.player, &url).await?;
     let title = body
         .title
         .as_deref()
@@ -1381,6 +1397,7 @@ pub(super) async fn cast_device_play(
         .map(str::trim)
         .filter(|value| !value.is_empty() && value.len() <= NAME_LIMIT);
     let job = job_id.and_then(|job_id| state.0.player.job(job_id));
+    let (url, start) = cast_target(&state.0.player, &url, job.as_ref(), start).await?;
     let base = lock_cast(&state).url_for_device(endpoint.as_ref());
     let lang = match (&body.subtitle, &job) {
         (Some(choice), job) => pick_lang(
@@ -1397,7 +1414,7 @@ pub(super) async fn cast_device_play(
         (Some(subtitle), Some(job), Some(base)) => {
             match tokio::time::timeout(QUICK_SUBTITLE, subtitle_ready(&state, job, subtitle)).await
             {
-                Ok(true) => match subtitle_address(base, job, subtitle) {
+                Ok(true) => match tv_subtitle_address(&state.0.player, base, job, subtitle) {
                     Some(address) => Some((subtitle.clone(), address)),
                     // The video's own tracks are not read yet.
                     None => {
@@ -1480,7 +1497,7 @@ fn watch_device(
         .unwrap_or_else(|| crate::prefs::current(state).quality);
     let origin = job
         .position
-        .filter(|at| at.is_finite() && *at >= 0.0)
+        .filter(|at| at.is_finite() && *at >= 0.0 && !is_cast_playlist(&media_url))
         .unwrap_or(0.0);
     let (volume, muted) = lock_cast(state).device_volume(&device.id);
     let view = DeviceView {
@@ -1632,6 +1649,11 @@ pub(super) async fn cast_device_seek(
             // The job is gone or failed; the TV may still have the video, so ask it directly.
             _ => return device_control(&state, &id, "seek", Some(relative)).await,
         }
+        // A whole-title stream holds every place: the TV asks for the part
+        // and Portal makes it.
+        if state.0.player.cast_session(&job_id).is_some() {
+            return device_control(&state, &id, "seek", Some(relative)).await;
+        }
         // Before the stream's start, or past what is transcoded, needs a new stream from there.
         if body.seconds < view.origin || !stream_reaches(&state.0.player, &job_id, relative) {
             return seek_ahead(&state, &id, &job_id, &view, body.seconds, true).await;
@@ -1751,7 +1773,7 @@ pub(super) async fn cast_device_subtitles(
                 .player
                 .job(&job_id)
                 .zip(base.as_ref())
-                .and_then(|(job, base)| subtitle_address(base, &job, choice));
+                .and_then(|(job, base)| tv_subtitle_address(&state.0.player, base, &job, choice));
             Some(found.ok_or_else(not_ready)?)
         }
     };
@@ -1905,6 +1927,8 @@ async fn recast_at(
         .cast_from(&device, &job, &title, art.as_deref(), start)
         .await
         .map_err(|text| super::fail(StatusCode::BAD_GATEWAY, &text))?;
+    // A whole-title stream is entered at the place in the title.
+    let start = if is_cast_playlist(&url) { at } else { start };
     let title = view.title.clone();
     let device_id = device.id.clone();
     // The fresh watch starts without a subtitle; the cast just made carries one over.
@@ -2276,6 +2300,45 @@ fn extend_choice(coverage: f64, played: f64, ended: bool) -> ExtendChoice {
     ExtendChoice::Wait
 }
 
+/// Whether the address is a job's whole-title playlist.
+fn is_cast_playlist(url: &str) -> bool {
+    url.split(['?', '#'])
+        .next()
+        .is_some_and(|path| path.ends_with(&format!("/{}", portal_engine::CAST_PLAYLIST)))
+}
+
+/// What the TV is given for a job's stream, and where in it the TV starts.
+/// `start` is a place in the job's own stream.
+///
+/// A title with a picture and a known length gets its whole-title playlist,
+/// entered at the place in the title. Anything else gets a file of what is
+/// ready, as before.
+async fn cast_target(
+    player: &portal_engine::Player,
+    url: &str,
+    job: Option<&portal_api::PlayJob>,
+    start: f64,
+) -> Result<(String, f64), super::ApiError> {
+    let whole = job
+        .filter(|_| url_targets_m3u8(url))
+        .and_then(|job| Some((job, player.cast_stream(&job.id)?)));
+    let Some((job, session)) = whole else {
+        return Ok((prepare_cast_media(player, url).await?, start));
+    };
+    let origin = job
+        .position
+        .filter(|at| at.is_finite() && *at >= 0.0)
+        .unwrap_or(0.0);
+    let at = origin + start.max(0.0);
+    // The encoder starts now, so the first part is there when the TV asks.
+    player.cast_warm(&session, at);
+    let base = url.find("/media/").map_or("", |end| &url[..end]);
+    Ok((
+        format!("{base}/media/{session}/{}", portal_engine::CAST_PLAYLIST),
+        at,
+    ))
+}
+
 /// The TV plays a progressive MP4. Some receivers reject a growing HLS
 /// playlist, so a Portal `.m3u8` is remuxed to `/media/{session}/cast.mp4`.
 async fn prepare_cast_media(
@@ -2330,8 +2393,6 @@ async fn wait_for_first_span(player: &portal_engine::Player, session: &str, play
 /// Covered seconds of the file the TV should load. Reuses one that already
 /// matches this playlist.
 async fn ensure_cast_mp4(playlist: &Path) -> Result<f64, PrepareFail> {
-    // One at a time: two casts of a stream would write the same file.
-    static REMUX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _remux = REMUX.lock().await;
     let text = std::fs::read_to_string(playlist).map_err(|_| PrepareFail::NotReady)?;
     let coverage = playlist_coverage(&text);
@@ -2345,31 +2406,10 @@ async fn ensure_cast_mp4(playlist: &Path) -> Result<f64, PrepareFail> {
     if cast_mp4_fresh(&mp4, &span_path, playlist, coverage, ended) {
         return Ok(read_span(&span_path).unwrap_or(coverage));
     }
-    // ffmpeg follows an EVENT playlist until it ends. A sibling VOD copy
-    // closes the file on the segments that exist now.
-    let snapshot = vod_snapshot(&text);
-    let snap_coverage = playlist_coverage(&snapshot);
-    if snap_coverage <= 0.0 {
-        return Err(PrepareFail::NotReady);
-    }
-    let vod = dir.join("cast.vod.m3u8");
-    std::fs::write(&vod, &snapshot).map_err(|_| PrepareFail::Failed)?;
+    // A file made ahead was for the one being replaced here.
+    drop_staged(dir);
     let part = dir.join("cast.mp4.part");
-    let _ = std::fs::remove_file(&part);
-    let copied = remux_file(&remux_copy_args(&vod, &part), COPY_LIMIT).await;
-    let ready = copied == Remux::Done && file_len(&part) > MIN_CAST_BYTES;
-    if !ready {
-        let _ = std::fs::remove_file(&part);
-        // A copy that ran out of time would only take longer encoded.
-        if copied == Remux::TimedOut {
-            return Err(PrepareFail::Failed);
-        }
-        let encoded = remux_file(&remux_encode_args(&vod, &part), ENCODE_LIMIT).await;
-        if encoded != Remux::Done || file_len(&part) <= MIN_CAST_BYTES {
-            let _ = std::fs::remove_file(&part);
-            return Err(PrepareFail::Failed);
-        }
-    }
+    let snap_coverage = remux_snapshot(dir, &text, &part).await?;
     if !replace_file(&part, &mp4).await {
         let _ = std::fs::remove_file(&part);
         // Whatever is there now is not known to match the saved length.
@@ -2378,6 +2418,152 @@ async fn ensure_cast_mp4(playlist: &Path) -> Result<f64, PrepareFail> {
     }
     let _ = std::fs::write(&span_path, format!("{snap_coverage:.3}\n"));
     Ok(snap_coverage)
+}
+
+/// One remux at a time: two would write the same files.
+static REMUX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Writes the playlist's segments so far to `part` as one MP4 and answers
+/// the seconds it holds. The caller holds `REMUX`.
+async fn remux_snapshot(dir: &Path, text: &str, part: &Path) -> Result<f64, PrepareFail> {
+    // ffmpeg follows an EVENT playlist until it ends. A sibling VOD copy
+    // closes the file on the segments that exist now.
+    let snapshot = vod_snapshot(text);
+    let snap_coverage = playlist_coverage(&snapshot);
+    if snap_coverage <= 0.0 {
+        return Err(PrepareFail::NotReady);
+    }
+    let vod = dir.join("cast.vod.m3u8");
+    std::fs::write(&vod, &snapshot).map_err(|_| PrepareFail::Failed)?;
+    let _ = std::fs::remove_file(part);
+    let copied = remux_file(&remux_copy_args(&vod, part), COPY_LIMIT).await;
+    let ready = copied == Remux::Done && file_len(part) > MIN_CAST_BYTES;
+    if !ready {
+        let _ = std::fs::remove_file(part);
+        // A copy that ran out of time would only take longer encoded.
+        if copied == Remux::TimedOut {
+            return Err(PrepareFail::Failed);
+        }
+        let encoded = remux_file(&remux_encode_args(&vod, part), ENCODE_LIMIT).await;
+        if encoded != Remux::Done || file_len(part) <= MIN_CAST_BYTES {
+            let _ = std::fs::remove_file(part);
+            return Err(PrepareFail::Failed);
+        }
+    }
+    Ok(snap_coverage)
+}
+
+/// The next cast file, made while the TV still plays the one before it.
+const STAGED_FILE: &str = "cast.next.mp4";
+const STAGED_SPAN: &str = "cast.next.span";
+/// The next file is started this long before the one playing ends, and
+/// earlier for a long file, which takes longer to write.
+const STAGE_LEAD_MIN: f64 = 30.0;
+const STAGE_LEAD_MAX: f64 = 240.0;
+const STAGE_LEAD_SHARE: f64 = 0.15;
+
+fn stage_lead(span: f64) -> f64 {
+    (span * STAGE_LEAD_SHARE).clamp(STAGE_LEAD_MIN, STAGE_LEAD_MAX)
+}
+
+fn drop_staged(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(STAGED_SPAN));
+    let _ = std::fs::remove_file(dir.join(STAGED_FILE));
+}
+
+/// Whether the next file should be made now: the TV is near the end of a
+/// cast file `span` seconds long, and the stream holds a real tail past it.
+fn stage_due(span: f64, at: f64, coverage: f64, ended: bool, staged: Option<f64>) -> bool {
+    if !at.is_finite() || span - at > stage_lead(span) {
+        return false;
+    }
+    if staged.is_some_and(|staged| staged >= span + EXTEND_FLOOR) {
+        return false;
+    }
+    extend_choice(coverage, span, ended) == ExtendChoice::Extend
+}
+
+/// Makes the file that follows the one on the TV shortly before that one
+/// ends, so the TV waits only for the new file to load and not for it to be
+/// written. Called with every look at the TV; starts one remux at most.
+fn stage_next_file(player: &portal_engine::Player, watched: &Watched, at: f64) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static STAGING: AtomicBool = AtomicBool::new(false);
+    struct Release;
+    impl Drop for Release {
+        fn drop(&mut self) {
+            STAGING.store(false, Ordering::SeqCst);
+        }
+    }
+    if !is_cast_file(&watched.media_url) {
+        return;
+    }
+    let Some(span) = url_span(&watched.media_url) else {
+        return;
+    };
+    if span - at > stage_lead(span) {
+        return;
+    }
+    let Some(parts) = media_url_parts(&watched.media_url) else {
+        return;
+    };
+    let Ok(playlist) = player.session_file(&parts.session, "index.m3u8") else {
+        return;
+    };
+    if STAGING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let release = Release;
+    tokio::spawn(async move {
+        let _release = release;
+        let Some(dir) = playlist.parent() else {
+            return;
+        };
+        let _remux = REMUX.lock().await;
+        let Ok(text) = std::fs::read_to_string(&playlist) else {
+            return;
+        };
+        let staged = read_span(&dir.join(STAGED_SPAN));
+        let coverage = playlist_coverage(&text);
+        if !stage_due(span, at, coverage, playlist_ended(&text), staged) {
+            return;
+        }
+        drop_staged(dir);
+        let part = dir.join("cast.next.part");
+        let Ok(made) = remux_snapshot(dir, &text, &part).await else {
+            return;
+        };
+        if replace_file(&part, &dir.join(STAGED_FILE)).await {
+            let _ = std::fs::write(dir.join(STAGED_SPAN), format!("{made:.3}\n"));
+        } else {
+            let _ = std::fs::remove_file(&part);
+        }
+    });
+}
+
+/// Puts a file made ahead in place as the cast file, when it holds a real
+/// tail past `played`. Answers the seconds it holds. Waits for one that is
+/// still being written.
+async fn take_staged(playlist: &Path, played: f64) -> Option<f64> {
+    let _remux = REMUX.lock().await;
+    let dir = playlist.parent()?;
+    let staged = read_span(&dir.join(STAGED_SPAN))?;
+    let text = std::fs::read_to_string(playlist).ok()?;
+    // A file longer than the stream is left from a stream since replaced.
+    let ours = staged <= playlist_coverage(&text) + SPAN_SLACK;
+    let _ = std::fs::remove_file(dir.join(STAGED_SPAN));
+    if !ours || staged < played + EXTEND_FLOOR {
+        drop_staged(dir);
+        return None;
+    }
+    let span_path = dir.join("cast.span");
+    if !replace_file(&dir.join(STAGED_FILE), &dir.join("cast.mp4")).await {
+        drop_staged(dir);
+        let _ = std::fs::remove_file(&span_path);
+        return None;
+    }
+    let _ = std::fs::write(&span_path, format!("{staged:.3}\n"));
+    Some(staged)
 }
 
 fn cast_mp4_fresh(mp4: &Path, span: &Path, playlist: &Path, coverage: f64, ended: bool) -> bool {
@@ -3260,7 +3446,7 @@ async fn later_subtitle(
     // in the wanted language is better than any online file.
     let job = tracks_read(state, job, still_wanted).await?;
     if let Some(choice @ CastSubtitle::Embedded { .. }) = &pick {
-        if subtitle_address(base, &job, choice).is_some() {
+        if tv_subtitle_address(&state.0.player, base, &job, choice).is_some() {
             return Some((choice.clone(), job));
         }
     }
@@ -3345,7 +3531,8 @@ async fn show_later(
     // A seek past the transcoded part restarts the stream at a new origin
     // meanwhile; an online file's offset follows the job as it is now.
     let now = state.0.player.job(&job.id);
-    let Some((address, track_lang)) = subtitle_address(base, now.as_ref().unwrap_or(job), &choice)
+    let Some((address, track_lang)) =
+        tv_subtitle_address(&state.0.player, base, now.as_ref().unwrap_or(job), &choice)
     else {
         return false;
     };
@@ -3444,8 +3631,9 @@ async fn continue_cast_file(
         }
     }
     let played_source = watched.origin + played_stream;
+    let staged = take_staged(&playlist, played_stream).await;
     let started = Instant::now();
-    loop {
+    while staged.is_none() {
         let text = match std::fs::read_to_string(&playlist) {
             Ok(text) => text,
             Err(_) => return watch::CastContinue::Done,
@@ -3484,13 +3672,16 @@ async fn continue_cast_file(
             muted: None,
         },
     );
-    let version = match ensure_cast_mp4(&playlist).await {
-        Ok(version) => version,
-        Err(PrepareFail::NotReady) => return watch::CastContinue::Done,
-        Err(PrepareFail::Failed) => {
-            tracing::warn!("{PREPARE_NOTE}");
-            return watch::CastContinue::Failed(PREPARE_NOTE.into());
-        }
+    let version = match staged {
+        Some(version) => version,
+        None => match ensure_cast_mp4(&playlist).await {
+            Ok(version) => version,
+            Err(PrepareFail::NotReady) => return watch::CastContinue::Done,
+            Err(PrepareFail::Failed) => {
+                tracing::warn!("{PREPARE_NOTE}");
+                return watch::CastContinue::Failed(PREPARE_NOTE.into());
+            }
+        },
     };
     let url = versioned_media(&watched.media_url, version);
     let start = start_within(&url, played_stream);
@@ -3514,7 +3705,9 @@ async fn continue_cast_file(
     };
     let job = backend.state.0.player.job(&watched.job_id);
     let shown = match (&choice, &job, &base) {
-        (Some(choice), Some(job), Some(base)) => subtitle_address(base, job, choice),
+        (Some(choice), Some(job), Some(base)) => {
+            tv_subtitle_address(&backend.state.0.player, base, job, choice)
+        }
         _ => None,
     };
     let thumb = base
@@ -3563,7 +3756,7 @@ impl AppBackend {
                 .ok_or("Portal could not find this PC's address on the TV's network.")?
         };
         let url = cast_media_url(&format!("{base}{playlist}")).map_err(str::to_string)?;
-        let url = prepare_cast_media(&self.state.0.player, &url)
+        let (url, start) = cast_target(&self.state.0.player, &url, Some(job), start)
             .await
             .map_err(|err| api_detail(&err))?;
         let title = clean_label(title);
@@ -3585,14 +3778,15 @@ impl AppBackend {
         let mut shown = None;
         if let Some(choice) = &current {
             if subtitle_ready(&self.state, job, choice).await {
-                shown =
-                    subtitle_address(&base, job, choice).map(|address| (choice.clone(), address));
+                shown = tv_subtitle_address(&self.state.0.player, &base, job, choice)
+                    .map(|address| (choice.clone(), address));
             }
         } else if let Some(lang) = wanted_lang.as_deref().filter(|_| !pending) {
             shown = quick_track(&self.state, job, lang)
                 .await
                 .and_then(|(choice, now)| {
-                    subtitle_address(&base, &now, &choice).map(|address| (choice, address))
+                    tv_subtitle_address(&self.state.0.player, &base, &now, &choice)
+                        .map(|address| (choice, address))
                 });
         }
         let args = play_args(
@@ -3736,6 +3930,10 @@ impl watch::Backend for AppBackend {
         played: Option<f64>,
     ) -> watch::CastContinue {
         continue_cast_file(self, gen, watched, played).await
+    }
+
+    fn ahead(&self, watched: &Watched, at: f64) {
+        stage_next_file(&self.state.0.player, watched, at);
     }
 
     fn progress(&self, report: &portal_api::ProgressReport) {

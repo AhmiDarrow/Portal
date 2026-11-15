@@ -19,6 +19,11 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod cast_stream;
+mod encoder;
+pub use encoder::Encoder;
+pub use cast_stream::{CAST_INIT, CAST_PLAYLIST};
+
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const BELOW_NORMAL: u32 = 0x00004000;
 const VIRTUAL_SCHEMES: &[&str] = &[
@@ -49,6 +54,13 @@ struct JobSlot {
     /// only rewrites them for the new start.
     subtitle_text: Option<Arc<Vec<SubtitleText>>>,
     extracting: bool,
+    /// The whole-title stream a TV plays, once one is cast.
+    cast: Option<cast_stream::CastStream>,
+    /// True while the browser's ffmpeg is held still because a TV plays the
+    /// title from its own stream. It runs on when a browser asks again.
+    parked: bool,
+    /// Last time a browser fetched the job's own stream.
+    stream_touch: Option<Instant>,
     /// Last time the page asked for the job or one of its files.
     last_touch: Instant,
 }
@@ -87,6 +99,9 @@ struct PlayerInner {
     zscale: Mutex<Option<bool>>,
     /// Only one job drives Kodi's player at a time.
     resolve: tokio::sync::Mutex<()>,
+    /// One request at a time decides whether the TV's encoder starts again.
+    cast_gate: tokio::sync::Mutex<()>,
+    hardware: Mutex<encoder::Hardware>,
     sweeping: AtomicBool,
 }
 
@@ -114,6 +129,8 @@ impl Player {
                 sessions: Mutex::new(HashMap::new()),
                 zscale: Mutex::new(None),
                 resolve: tokio::sync::Mutex::new(()),
+                cast_gate: tokio::sync::Mutex::new(()),
+                hardware: Mutex::new(encoder::Hardware::new()),
                 sweeping: AtomicBool::new(false),
             }),
         }
@@ -164,6 +181,9 @@ impl Player {
                 cut: 0,
                 subtitle_text: None,
                 extracting: false,
+                cast: None,
+                parked: false,
+                stream_touch: None,
                 last_touch: Instant::now(),
             },
         );
@@ -261,7 +281,7 @@ impl Player {
     }
 
     pub async fn stop(&self, id: &str) -> Result<(), EngineError> {
-        let (ffmpeg, dir) = {
+        let (ffmpeg, dir, cast) = {
             let mut jobs = self.lock_jobs();
             let mut sessions = self.lock_sessions();
             let job_id = if jobs.contains_key(id) {
@@ -277,10 +297,16 @@ impl Player {
             if let Some(session) = &slot.session {
                 sessions.remove(session);
             }
-            (slot.ffmpeg, slot.dir)
+            if let Some(cast) = &slot.cast {
+                sessions.remove(cast.session());
+            }
+            (slot.ffmpeg, slot.dir, slot.cast)
         };
         if let Some(ffmpeg) = ffmpeg {
             let _ = tokio::task::spawn_blocking(move || end_process(&ffmpeg)).await;
+        }
+        if let Some(cast) = cast {
+            let _ = tokio::task::spawn_blocking(move || cast.close()).await;
         }
         if let Some(dir) = dir {
             let _ = tokio::task::spawn_blocking(move || remove_dir(&dir)).await;
@@ -292,11 +318,17 @@ impl Player {
         let path = resolve_session_file(&self.inner.root, session, name)?;
         // A paused player keeps reloading the playlist. A segment or a subtitle
         // is someone still watching, so only those refresh the idle clock.
-        if name != "index.m3u8" {
-            let job_id = self.lock_sessions().get(session).cloned();
-            if let Some(job_id) = job_id {
-                if let Some(slot) = self.lock_jobs().get_mut(&job_id) {
+        let job_id = self.lock_sessions().get(session).cloned();
+        if let Some(job_id) = job_id {
+            if let Some(slot) = self.lock_jobs().get_mut(&job_id) {
+                if name != "index.m3u8" {
                     slot.last_touch = Instant::now();
+                }
+                // A browser is back for the stream a TV cast had put on hold.
+                let stream = name == "index.m3u8" || name.ends_with(".ts");
+                if stream && slot.session.as_deref() == Some(session) {
+                    slot.stream_touch = Some(Instant::now());
+                    unpark(slot);
                 }
             }
         }
@@ -621,6 +653,13 @@ impl Player {
                 };
                 source.audio = Some(chosen);
             }
+            // Pieces made for a TV hold the old quality or audio track.
+            if quality.is_some() || audio.is_some() {
+                if let Some(cast) = slot.cast.take() {
+                    sessions.remove(cast.session());
+                    tokio::task::spawn_blocking(move || cast.close());
+                }
+            }
             slot.cut = slot.cut.saturating_add(1);
             let cut = slot.cut;
             let ffmpeg = slot.ffmpeg.take();
@@ -720,11 +759,17 @@ impl Player {
         } else {
             false
         };
-        let args = ffmpeg_args(&source, at, &dir, plan.as_ref(), zscale)?;
+        let encoder = if plan.is_some_and(|plan| !plan.copy) {
+            self.encoder().await
+        } else {
+            Encoder::Cpu
+        };
+        let args = ffmpeg_args_with(&source, at, &dir, plan.as_ref(), zscale, encoder)?;
         let begun = Instant::now();
         tracing::info!(
             job = %job_id,
             at,
+            encoder = encoder.name(),
             copy = plan.as_ref().is_some_and(|plan| plan.copy),
             max_kbps = plan.as_ref().and_then(|plan| plan.maxrate).map(|rate| rate / 1000),
             "Starting the stream"
@@ -745,6 +790,11 @@ impl Player {
             discard(child, dir).await;
             if self.stale(job_id, cut) {
                 return Ok(());
+            }
+            if encoder.is_hardware() && err.to_string() != "Stopped" {
+                // The same video, encoded by the processor this time.
+                self.hardware_failed();
+                return Box::pin(self.open_at(job_id, cut, at)).await;
             }
             tracing::warn!(
                 job = %job_id,
@@ -945,6 +995,7 @@ impl Player {
         }
         slot.ffmpeg = Some(child);
         slot.stderr = Some(stderr);
+        slot.parked = false;
         true
     }
 
@@ -1431,7 +1482,7 @@ fn valid_session(session: &str) -> bool {
 }
 
 fn valid_media_name(name: &str) -> bool {
-    if name == "index.m3u8" || name == "cast.mp4" {
+    if name == "index.m3u8" || name == "cast.mp4" || cast_stream::cast_name(name) {
         return true;
     }
     numbered(name, "seg", ".ts") || numbered(name, "sub", ".vtt")
@@ -2890,12 +2941,24 @@ fn contains_word(text: &str, word: &str) -> bool {
     false
 }
 
+#[cfg(test)]
 fn ffmpeg_args(
     source: &MediaSource,
     seek: u64,
     out: &Path,
     plan: Option<&VideoPlan>,
     zscale: bool,
+) -> Result<Vec<String>, EngineError> {
+    ffmpeg_args_with(source, seek, out, plan, zscale, Encoder::Cpu)
+}
+
+fn ffmpeg_args_with(
+    source: &MediaSource,
+    seek: u64,
+    out: &Path,
+    plan: Option<&VideoPlan>,
+    zscale: bool,
+    encoder: Encoder,
 ) -> Result<Vec<String>, EngineError> {
     let input = source.input.as_str();
     assert_safe_input(input)?;
@@ -2917,6 +2980,7 @@ fn ffmpeg_args(
         "-readrate_initial_burst".into(),
         READ_BURST_SECONDS.to_string(),
     ]);
+    args.extend(encoder::decode_args(encoder));
     let copy_seek = copied_from_keyframe(seek, plan);
     if seek > 0 {
         if copy_seek {
@@ -2936,7 +3000,14 @@ fn ffmpeg_args(
     if let (Some(video), Some(plan)) = (source.video.as_ref(), plan) {
         args.push("-map".into());
         args.push(stream_map(video, "v"));
-        args.extend(video_args(plan, &video.transfer, video.interlaced, zscale));
+        args.extend(video_args_cut(
+            plan,
+            &video.transfer,
+            video.interlaced,
+            zscale,
+            SEGMENT_SECONDS,
+            encoder,
+        ));
     } else {
         args.push("-vn".into());
     }
@@ -2965,7 +3036,21 @@ fn ffmpeg_args(
     Ok(args)
 }
 
+#[cfg(test)]
 fn video_args(plan: &VideoPlan, transfer: &str, interlaced: bool, zscale: bool) -> Vec<String> {
+    video_args_cut(plan, transfer, interlaced, zscale, SEGMENT_SECONDS, Encoder::Cpu)
+}
+
+/// The picture's arguments, with a keyframe every `segment` seconds when it
+/// is encoded.
+fn video_args_cut(
+    plan: &VideoPlan,
+    transfer: &str,
+    interlaced: bool,
+    zscale: bool,
+    segment: u32,
+    encoder: Encoder,
+) -> Vec<String> {
     if plan.copy {
         return vec!["-c:v".into(), "copy".into()];
     }
@@ -2998,31 +3083,15 @@ fn video_args(plan: &VideoPlan, transfer: &str, interlaced: bool, zscale: bool) 
         filters.push("zscale=t=bt709:m=bt709:r=tv".into());
     }
     filters.push("format=yuv420p".into());
-    let mut args = vec![
-        "-vf".into(),
-        filters.join(","),
-        "-c:v".into(),
-        "libx264".into(),
-        "-preset".into(),
-        "veryfast".into(),
-        "-crf".into(),
-        "21".into(),
-    ];
-    if let Some(rate) = plan.maxrate {
-        // CRF keeps calm scenes small; the ceiling caps the busy ones, over
-        // a two-second buffer.
-        args.extend([
-            "-maxrate".into(),
-            rate.to_string(),
-            "-bufsize".into(),
-            (rate * 2).to_string(),
-        ]);
-    }
+    let mut args = vec!["-vf".into(), filters.join(",")];
+    // A steady quality keeps calm scenes small; the ceiling caps the busy
+    // ones, over a two-second buffer.
+    args.extend(encoder::encode_args(encoder, plan.maxrate));
     args.extend([
         "-threads".into(),
         thread_count().to_string(),
         "-force_key_frames".into(),
-        format!("expr:gte(t,n_forced*{SEGMENT_SECONDS})"),
+        format!("expr:gte(t,n_forced*{segment})"),
     ]);
     args
 }
@@ -3123,10 +3192,19 @@ fn thread_count() -> usize {
 }
 
 fn spawn_ffmpeg(ffmpeg: &Path, args: &[String]) -> std::io::Result<Child> {
+    spawn_ffmpeg_in(ffmpeg, args, None)
+}
+
+/// `folder` is where ffmpeg runs, for a file it names without a folder.
+fn spawn_ffmpeg_in(ffmpeg: &Path, args: &[String], folder: Option<&Path>) -> std::io::Result<Child> {
     use std::os::windows::process::CommandExt;
+    let mut command = Command::new(ffmpeg);
+    if let Some(folder) = folder {
+        command.current_dir(folder);
+    }
     // Normal priority. A below-normal encode loses cores to the browser and
     // the picture falls behind the playhead. The window stays hidden.
-    Command::new(ffmpeg)
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -3584,6 +3662,59 @@ async fn discard(child: Arc<Mutex<Child>>, dir: PathBuf) {
         remove_dir(&dir);
     })
     .await;
+}
+
+#[link(name = "ntdll")]
+extern "system" {
+    fn NtSuspendProcess(process: *mut std::ffi::c_void) -> i32;
+    fn NtResumeProcess(process: *mut std::ffi::c_void) -> i32;
+}
+
+/// A browser that fetched the stream this recently is still playing it.
+const BROWSER_QUIET: Duration = Duration::from_secs(20);
+
+/// Holds the browser's ffmpeg still. A TV playing the title has its own
+/// stream, and two encodes of one video are twice the work for one viewer.
+/// What is already made stays, and the encode runs on from there later.
+/// A browser still fetching the stream keeps its encode.
+fn park(slot: &mut JobSlot) {
+    use std::os::windows::io::AsRawHandle;
+    if slot.parked {
+        return;
+    }
+    if slot
+        .stream_touch
+        .is_some_and(|at| at.elapsed() < BROWSER_QUIET)
+    {
+        return;
+    }
+    let Some(ffmpeg) = &slot.ffmpeg else {
+        return;
+    };
+    let mut child = lock_child(ffmpeg);
+    if !matches!(child.try_wait(), Ok(None)) {
+        return;
+    }
+    // SAFETY: the handle belongs to a child this process still holds open.
+    let held = unsafe { NtSuspendProcess(child.as_raw_handle() as _) } >= 0;
+    drop(child);
+    slot.parked = held;
+}
+
+/// Lets a parked ffmpeg run on.
+fn unpark(slot: &mut JobSlot) {
+    use std::os::windows::io::AsRawHandle;
+    if !slot.parked {
+        return;
+    }
+    slot.parked = false;
+    if let Some(ffmpeg) = &slot.ffmpeg {
+        let child = lock_child(ffmpeg);
+        // SAFETY: as in `park`.
+        unsafe {
+            NtResumeProcess(child.as_raw_handle() as _);
+        }
+    }
 }
 
 /// ffmpeg starts no children, so ending the process itself is enough.

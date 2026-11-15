@@ -596,6 +596,7 @@ export const api = {
   setCastLan: (lan: boolean) => send<CastInfo>("/api/cast", jsonInit("PUT", { lan })),
   app: () => send<AppInfo>("/api/app"),
   appAutostart: (on: boolean) => send<AppInfo>("/api/app/autostart", jsonInit("POST", { on })),
+  appEncoder: (on: boolean) => send<AppInfo>("/api/app/encoder", jsonInit("POST", { on })),
   appRestart: () => send<{ ok: boolean }>("/api/app/restart", jsonInit("POST")),
   appQuit: () => send<{ ok: boolean }>("/api/app/quit", jsonInit("POST")),
   appLogs: () => send<{ ok: boolean }>("/api/app/logs", jsonInit("POST")),
@@ -896,6 +897,8 @@ export type AppInfo = {
   tray: boolean;
   /** Whether Portal starts with Windows; absent when unknown. */
   autostart?: boolean;
+  /** What encodes the video: whether a graphics card may, and the card this PC has ("cpu" for none). */
+  encoder?: { hardware: boolean; card: string };
 };
 
 export type CastInfo = {

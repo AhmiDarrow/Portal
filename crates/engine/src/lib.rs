@@ -25,7 +25,9 @@ pub use catalog::{
     run_plugin_builtin, search, settings_addon, settings_name_hint, video_addons,
 };
 pub use error::{public_error, EngineError};
-pub use playback::{picks_source, release_name, shift_vtt, source_cap, Player};
+pub use playback::{
+    picks_source, release_name, shift_vtt, source_cap, Encoder, Player, CAST_INIT, CAST_PLAYLIST,
+};
 pub use process::{ProcessConfig, Supervisor};
 pub use prompts::Prompts;
 pub use rpc::{KodiClient, Note, RpcFail};

@@ -216,6 +216,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         vec![profile.clone(), programs_addons.clone()],
     );
     let player = Player::new(paths::ffmpeg(), paths::ffprobe(), portal_dir.join("hls"));
+    player.set_hardware(app::hardware_saved(&portal_dir));
     backup::on_version_change(&portal_dir, env!("CARGO_PKG_VERSION"));
     let store = Store::open(portal_dir.join("library.json"))?;
     let cast_hub = cast::CastHub::open(&portal_dir);
@@ -248,6 +249,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/update/install", post(update::update_install))
         .route("/api/app", get(app::app_get))
         .route("/api/app/autostart", post(app::app_autostart))
+        .route("/api/app/encoder", post(app::app_encoder))
         .route("/api/app/restart", post(app::app_restart))
         .route("/api/app/quit", post(app::app_quit))
         .route("/api/app/logs", post(app::app_logs))
@@ -2196,6 +2198,9 @@ async fn load_media(
     name: &str,
     headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
+    if let Some(response) = whole_title_file(state, session, name).await? {
+        return Ok(response);
+    }
     let path = state
         .0
         .player
@@ -2225,6 +2230,46 @@ async fn load_media(
         MediaSpan::Unsatisfiable { .. } => Body::empty(),
     };
     Ok(media_response(media_type(name), span, body))
+}
+
+/// A file of a whole-title stream that is made when it is asked for: the
+/// start file, a piece, or a subtitle on the title's own clock. None for
+/// any other file.
+async fn whole_title_file(
+    state: &AppState,
+    session: &str,
+    name: &str,
+) -> Result<Option<Response>, ApiError> {
+    let made = name == portal_engine::CAST_INIT || name.ends_with(".m4s");
+    let subtitle = name
+        .strip_prefix("sub")
+        .and_then(|rest| rest.strip_suffix(".vtt"))
+        .and_then(|digits| digits.parse::<u32>().ok());
+    if !(made || subtitle.is_some()) || !state.0.player.is_cast_session(session) {
+        return Ok(None);
+    }
+    let bytes = match subtitle {
+        Some(id) => state
+            .0
+            .player
+            .cast_subtitle(session, id)
+            .map(String::into_bytes)
+            .ok_or_else(|| fail(StatusCode::NOT_FOUND, "That subtitle is gone."))?,
+        None => state
+            .0
+            .player
+            .cast_file(session, name)
+            .await
+            .map_err(from_engine)?,
+    };
+    let span = MediaSpan::Full {
+        len: bytes.len() as u64,
+    };
+    Ok(Some(media_response(
+        media_type(name),
+        span,
+        Body::from(bytes),
+    )))
 }
 
 /// A growing playlist names a segment, then ffmpeg renames it into place.
@@ -2424,7 +2469,7 @@ fn media_type(name: &str) -> &'static str {
         "application/vnd.apple.mpegurl"
     } else if name.ends_with(".vtt") {
         "text/vtt; charset=utf-8"
-    } else if name.ends_with(".mp4") || name.ends_with(".m4v") {
+    } else if name.ends_with(".mp4") || name.ends_with(".m4v") || name.ends_with(".m4s") {
         "video/mp4"
     } else {
         "video/mp2t"
