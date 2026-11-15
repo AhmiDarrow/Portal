@@ -11,7 +11,10 @@ export type ThemeId =
   | "purple"
   | "alien"
   | "orange"
-  | "cyan";
+  | "cyan"
+  | "deutan"
+  | "protan"
+  | "tritan";
 
 type Kind = "dark" | "light";
 
@@ -59,6 +62,14 @@ const PALETTES: Record<Palette["id"], Palette> = {
   alien: palette("alien", "Dark Purple", "dark", "#07040f", "#0f081a", "#1a0f2e", "#3b1d66", "#b026ff", "#f2e8ff", "#c4a0e8", "#ff6b9d"),
   orange: palette("orange", "Amber", "dark", "#14100a", "#1f1810", "#2e2418", "#4a3a24", "#fb923c", "#efe6da", "#c4a88a", "#fca5a5"),
   cyan: palette("cyan", "Ocean", "dark", "#0a1216", "#0f1c22", "#163038", "#1e4a55", "#22d3ee", "#d8eef2", "#8fb8c2", "#fca5a5"),
+  // The next three keep the accent and the error colour far apart, in hue
+  // and in brightness, for one kind of colour vision each: weak green (blue
+  // against orange), weak red (blue against yellow, since red reads as dark)
+  // and weak blue (teal against rose). Both colours hold at least 4.5:1
+  // contrast on every surface.
+  deutan: palette("deutan", "Azure", "dark", "#0b0f14", "#121821", "#1a2330", "#34465a", "#56b4e9", "#e9f0f6", "#a9b9c7", "#f5a13c"),
+  protan: palette("protan", "Skyline", "dark", "#0d1013", "#151a1f", "#1e252c", "#384551", "#6cb6ff", "#eef1f4", "#adb8c2", "#ffc233"),
+  tritan: palette("tritan", "Lagoon", "dark", "#12100f", "#1b1817", "#262120", "#453b39", "#2fd0c0", "#f3efee", "#c0b6b3", "#ff6f7d"),
 };
 
 export type ThemeChoice = {
@@ -78,8 +89,11 @@ export const themeMenu: ThemeChoice[] = [
   { id: "light", name: "Light", swatch: PALETTES.light.accent },
   { id: "orange", name: "Amber", swatch: PALETTES.orange.accent },
   { id: "purple", name: "Amethyst", swatch: PALETTES.purple.accent },
+  { id: "deutan", name: "Azure", swatch: PALETTES.deutan.accent },
   { id: "green", name: "Emerald", swatch: PALETTES.green.accent },
+  { id: "tritan", name: "Lagoon", swatch: PALETTES.tritan.accent },
   { id: "cyan", name: "Ocean", swatch: PALETTES.cyan.accent },
+  { id: "protan", name: "Skyline", swatch: PALETTES.protan.accent },
   { id: "dark", name: "Dark", swatch: PALETTES.dark.accent },
   { id: "neutral", name: "Neutral Dark", swatch: PALETTES.neutral.accent },
   { id: "forest", name: "Dark Forest", swatch: PALETTES.forest.accent },
