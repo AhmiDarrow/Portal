@@ -810,7 +810,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "portal-api"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -818,7 +818,7 @@ dependencies = [
 
 [[package]]
 name = "portal-engine"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "flate2",
  "getrandom 0.2.17",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "portal-http"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "axum",
  "embed-resource",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "portal-launcher"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "embed-resource",
  "serde_json",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "portal-library"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "portal-api",
  "serde",
