@@ -2335,3 +2335,7 @@ body.info-open { overflow: hidden; }
   font-variant-numeric: tabular-nums;
   margin: 1.2rem 0;
 }
+
+/* A heading with a small action beside it, as on the Source page's Updates. */
+.section-head { justify-content: space-between; }
+.section-head > h2 { margin: 0; }

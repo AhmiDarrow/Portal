@@ -23,7 +23,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use portal_api::{
-    AddonList, BrowsePage, CardList, HistoryList, Home, InstallResult, JobState, ListPut, OkBody,
+    AddonList, AddonUpdates, BrowsePage, CardList, HistoryList, Home, InstallResult, JobState, ListPut, OkBody,
     PlayAccepted, PlayJob, PlayKind, PlayRequest, ProgressReport, Prompt, PromptAction,
     PromptAnswer, PromptBody, PromptKind, RemoveResult, RepoDetail, RepoList, SavedMap, SavedQuery,
     SettingWrite, SettingsDoc, Source, Status, TitleDetail, TitleKind, WindowRequest,
@@ -300,6 +300,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/progress", post(progress))
         .route("/api/addons", get(addons))
+        .route("/api/addons/updates", get(addon_updates))
+        .route("/api/addons/{id}/update", post(addon_update))
         .route("/api/addons/{id}", delete(addon_remove))
         .route("/api/addons/{id}/settings", get(settings_form))
         .route(
@@ -2109,6 +2111,37 @@ async fn finish_remove(state: &AppState, outcome: RemoveOutcome) -> RemoveResult
         kind: outcome.kind,
         applies: Some(applies.to_string()),
     }
+}
+
+#[derive(Deserialize)]
+struct UpdatesQuery {
+    /// Read the repositories again now rather than use the last list.
+    #[serde(default)]
+    fresh: bool,
+}
+
+/// Add-ons on this PC that a repository has a newer version of.
+async fn addon_updates(
+    State(state): State<AppState>,
+    Query(query): Query<UpdatesQuery>,
+) -> Result<Json<AddonUpdates>, ApiError> {
+    let items = state
+        .0
+        .addons
+        .updates(query.fresh)
+        .await
+        .map_err(from_engine)?;
+    Ok(Json(AddonUpdates { items }))
+}
+
+/// Installs the newer version of an add-on, then restarts Kodi so it loads
+/// it, as an install does.
+async fn addon_update(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Json<InstallResult>, ApiError> {
+    let outcome = state.0.addons.update(&id).await.map_err(from_engine)?;
+    Ok(Json(finish_install(&state, outcome).await))
 }
 
 async fn repo_install_addon(

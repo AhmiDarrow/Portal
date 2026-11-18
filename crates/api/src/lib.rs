@@ -178,6 +178,26 @@ pub struct RepoDetail {
     pub items: Vec<RepoAddon>,
 }
 
+/// An add-on on this PC that one of its repositories has a newer version of.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AddonUpdate {
+    pub id: String,
+    pub name: String,
+    /// The version on this PC.
+    pub installed: String,
+    /// The newest version a repository publishes.
+    pub available: String,
+    /// The repository that publishes it.
+    pub repo: String,
+    /// `video`, or `module` for a Python module other add-ons use.
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AddonUpdates {
+    pub items: Vec<AddonUpdate>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InstalledAddon {
     pub id: String,

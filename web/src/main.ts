@@ -21,6 +21,7 @@ import {
   showRoute,
   titleHref,
   type AddonCard,
+  type AddonUpdate,
   type BrowseItem,
   type BrowsePage,
   type Card,
@@ -68,6 +69,7 @@ import {
   beginActivity,
   describeAction,
   describeAddonInstall,
+  describeAddonUpdate,
   describeBrowse,
   describeLibrary,
   describeRemove,
@@ -94,6 +96,10 @@ let renderToken = 0;
 let categoryAddon = "";
 let categoryIndex = 0;
 let sourceBusy = false;
+/** Add-ons with a newer version in a repository; null until first read. */
+let addonUpdates: AddonUpdate[] | null = null;
+let updatesError = "";
+let updatesChecking = false;
 let sourceFlash = "";
 let clearRepoUrl = false;
 let openRepoId = "";
@@ -1808,6 +1814,9 @@ function paintSource(addonError: string, repoError: string): void {
       </div>
       <div id="repo-video-rows"></div>
     </div>
+    <div class="row section-head"><h2>Updates</h2><button id="update-check" type="button" class="quiet">Check now</button></div>
+    <p id="update-note" class="muted" role="status"></p>
+    <div id="update-rows"></div>
     <h2>Loaded video add-ons</h2>
     <p id="source-current" class="muted"></p>
     <p id="loaded-error" class="error"${addonError ? "" : " hidden"}></p>
@@ -1850,8 +1859,95 @@ function paintSource(addonError: string, repoError: string): void {
   });
   document.getElementById("source-filter")?.addEventListener("input", () => paintLoadedRows());
   document.getElementById("repo-filter")?.addEventListener("input", () => paintRepoVideoRows());
+  document.getElementById("update-check")?.addEventListener("click", () => void checkUpdates(true));
   paintRepoRows();
   paintLoadedRows();
+  paintUpdateRows();
+  if (addonUpdates === null) void checkUpdates(false);
+}
+
+/** Reads which add-ons have a newer version. The server keeps the answer
+ * for an hour; `fresh` asks the repositories again now. */
+async function checkUpdates(fresh: boolean): Promise<void> {
+  if (updatesChecking) return;
+  updatesChecking = true;
+  updatesError = "";
+  paintUpdateRows();
+  try {
+    addonUpdates = (await api.addonUpdates(fresh)).items;
+  } catch (err) {
+    updatesError = detail(err);
+  } finally {
+    updatesChecking = false;
+    if (route().page === "source") {
+      paintUpdateRows();
+      paintLoadedRows();
+    }
+  }
+}
+
+function paintUpdateRows(): void {
+  const note = document.getElementById("update-note");
+  const host = document.getElementById("update-rows");
+  const button = document.getElementById("update-check");
+  if (!note || !host) return;
+  if (button instanceof HTMLButtonElement) button.disabled = updatesChecking;
+  const items = addonUpdates ?? [];
+  if (updatesChecking) note.textContent = "Checking the repositories…";
+  else if (updatesError) note.textContent = updatesError;
+  else if (addonUpdates === null) note.textContent = "";
+  else if (!items.length) note.textContent = "Every add-on is up to date.";
+  else note.textContent = items.length === 1 ? "1 add-on has an update." : items.length + " add-ons have an update.";
+  host.innerHTML = items.map(updateRow).join("");
+}
+
+function updateRow(item: AddonUpdate): string {
+  const name = displayName(item.name, "Add-on");
+  const kind = item.kind === "module" ? "Module" : "Video add-on";
+  return `
+    <article class="addon">
+      <div class="grow">
+        <strong>${esc(name)}</strong>
+        <div class="muted">${esc(kind)} · ${esc(item.installed)} → ${esc(item.available)}</div>
+      </div>
+      <div class="row-actions">
+        <button type="button" data-act="${act(() => void updateAddon(item.id))}" aria-label="Update ${esc(name)} to ${esc(item.available)}">Update</button>
+      </div>
+    </article>
+  `;
+}
+
+function updateNote(result: InstallResult, version: string): string {
+  const name = displayName(result.name, "That add-on");
+  const to = version ? " to " + version : "";
+  if (result.applies === "next-start") return name + " is updated" + to + ". The new version loads after the next start.";
+  return name + " is updated" + to + ".";
+}
+
+async function updateAddon(id: string): Promise<void> {
+  if (sourceBusy) return;
+  if (!addonIdOk(id)) {
+    setRepoNote("Unknown add-on.");
+    return;
+  }
+  const item = addonUpdates?.find((entry) => entry.id === id);
+  const name = displayName(item?.name ?? "", "");
+  sourceBusy = true;
+  setRepoNote("");
+  const ticket = showPage(describeAddonUpdate(name));
+  let handed = false;
+  try {
+    const result = await api.updateAddon(id);
+    sourceFlash = updateNote(result, item?.available ?? "");
+    addonUpdates = (addonUpdates ?? []).filter((entry) => entry.id !== id);
+    handed = true;
+    await render();
+  } catch (err) {
+    setRepoNote(detail(err));
+  } finally {
+    sourceBusy = false;
+    if (!handed) hideTicket(ticket);
+  }
 }
 
 function setRepoNote(text: string): void {
@@ -2034,7 +2130,7 @@ function addonRow(addon: AddonCard, current: boolean): string {
       ${artBlock(addon.art, displayName(addon.name, "Add-on"))}
       <div class="grow">
         <strong>${esc(displayName(addon.name, "Add-on"))}</strong>
-        <div class="muted">${esc(addon.id)}</div>
+        <div class="muted">${esc(addon.id)}${updateFor(addon.id)}</div>
       </div>
       <div class="row-actions">
         <a href="${esc(settingsHref(addon.id))}">Settings</a>
@@ -2043,6 +2139,12 @@ function addonRow(addon: AddonCard, current: boolean): string {
       </div>
     </article>
   `;
+}
+
+/** " · Update available: 1.2", when a repository has a newer version. */
+function updateFor(id: string): string {
+  const found = addonUpdates?.find((item) => item.id === id);
+  return found ? " · Update available: " + esc(found.available) : "";
 }
 
 async function chooseSource(addon: AddonCard): Promise<void> {
