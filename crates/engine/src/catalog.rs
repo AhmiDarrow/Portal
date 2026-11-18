@@ -605,11 +605,12 @@ async fn run_search_action(
     query: &str,
 ) -> Result<BrowsePage, EngineError> {
     // A hidden player never shows the search keyboard, and a busy dialog
-    // often covers it. Keep the player on the work area until the add-on
-    // switches to the results folder.
+    // often covers it. Keep the player shown, parked off every monitor,
+    // until the add-on switches to the results folder: the keyboard takes
+    // text there, and the viewer never sees Kodi.
     let shown = crate::process::reveal_player_window();
     if let Some(window) = &shown {
-        window.show_for_answer();
+        window.assert_shown();
     }
     let before = container_folder(dialog_client).await;
     let builtin = run_plugin_builtin(path);
@@ -627,7 +628,7 @@ async fn run_search_action(
         }
         if !typed && keyboard_open(dialog_client).await {
             if let Some(window) = &shown {
-                window.show_for_answer();
+                window.assert_shown();
             }
             uncover_keyboard(dialog_client).await;
             // One try: a keyboard that will not take the text still has to
@@ -1460,7 +1461,7 @@ async fn type_search(dialog: &KodiClient, query: &str) -> bool {
             if keyboard_window(&props) {
                 let shown = crate::process::reveal_player_window();
                 if let Some(window) = &shown {
-                    window.show_for_answer();
+                    window.assert_shown();
                 }
                 uncover_keyboard(dialog).await;
                 let _ = dialog

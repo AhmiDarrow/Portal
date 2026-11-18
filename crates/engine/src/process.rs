@@ -377,6 +377,7 @@ impl Supervisor {
         let Some(pid) = status.pid else {
             return Err(EngineError::ForeignWindow);
         };
+        end_start_guard();
         show_pid(pid, visible);
         Ok(self.status_locked().await)
     }
@@ -919,6 +920,7 @@ fn launch_if_alone(
     // No Kodi is running, so none can write its settings over this change.
     let web = prepare_web_server(guisettings, marker);
     let pid = spawn_kodi(exe)?;
+    guard_start(pid);
     if extra_started(pid, scan_kodi().as_deref()) {
         stop_pid(pid);
         return Err(EngineError::Unavailable(ALREADY_RUNNING));
@@ -1067,27 +1069,65 @@ fn xml_escape(text: &str) -> String {
 /// Kodi starts inside the job instead. The second attempt runs only when the
 /// first did not create a process and the machine still shows no Kodi.
 fn spawn_kodi(exe: &Path) -> Result<u32, EngineError> {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
     let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
-    let spawn = |flags: u32| {
-        Command::new(exe)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(flags)
-            .spawn()
-    };
-    let child = match spawn(base | CREATE_BREAKAWAY_FROM_JOB) {
-        Ok(child) => child,
-        Err(_) => {
+    match spawn_hidden(exe, base | CREATE_BREAKAWAY_FROM_JOB) {
+        Some(pid) => Ok(pid),
+        None => {
             refuse_start(scan_kodi().as_deref())?;
-            spawn(base).map_err(|_| EngineError::Message("Could not start Kodi.".into()))?
+            spawn_hidden(exe, base)
+                .ok_or_else(|| EngineError::Message("Could not start Kodi.".into()))
         }
+    }
+}
+
+/// Starts a program whose first window stays hidden. Windows applies the
+/// start-up "hidden" to the program's first show, so Kodi's window never
+/// appears while it starts, rather than showing until Portal can hide it.
+/// No handles are passed on, so Kodi has no console input or output.
+fn spawn_hidden(exe: &Path, flags: u32) -> Option<u32> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, PROCESS_INFORMATION, STARTF_USESHOWWINDOW, STARTUPINFOW,
     };
-    let pid = child.id();
-    drop(child);
-    Ok(pid)
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    let quote = u16::from(b'"');
+    let path: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    // The program's own name, quoted, as its first argument.
+    let mut line: Vec<u16> = std::iter::once(quote)
+        .chain(exe.as_os_str().encode_wide())
+        .chain([quote, 0])
+        .collect();
+    let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE as u16;
+    let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: both strings end in a zero and outlive the call; the
+    // structures are sized and zeroed as the call expects.
+    let ok = unsafe {
+        CreateProcessW(
+            path.as_ptr(),
+            line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            flags,
+            std::ptr::null(),
+            std::ptr::null(),
+            &startup,
+            &mut info,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    // SAFETY: the handles were just returned to this process and are closed once.
+    unsafe {
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+    }
+    Some(info.dwProcessId)
 }
 
 async fn hide_when_ready(pid: u32) {
@@ -1271,16 +1311,18 @@ impl InputWindow {
             return;
         };
         for window in &origin {
-            // Same inactive place as present(): an activating move during a
-            // busy add-on makes Windows close Kodi.
-            place_window_inactive(
+            // Hidden first, then moved back while hidden: a move that also
+            // shows the window would put Kodi on screen at its old place
+            // for a moment. Inactive, as in present(): an activating move
+            // during a busy add-on makes Windows close Kodi.
+            show_hwnd(window.hwnd, false);
+            place_hidden(
                 window.hwnd,
                 window.left,
                 window.top,
                 window.width,
                 window.height,
             );
-            show_hwnd(window.hwnd, false);
         }
     }
 }
@@ -1437,6 +1479,24 @@ fn place_window_with(hwnd: isize, x: i32, y: i32, width: i32, height: i32, inact
             width.max(1),
             height.max(1),
             flags,
+        );
+    }
+}
+
+/// Moves and sizes a window without showing or activating it.
+fn place_hidden(hwnd: isize, x: i32, y: i32, width: i32, height: i32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+    };
+    unsafe {
+        SetWindowPos(
+            hwnd as usize as _,
+            std::ptr::null_mut(),
+            x,
+            y,
+            width.max(1),
+            height.max(1),
+            SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
 }
@@ -1875,6 +1935,108 @@ static REVEAL_DEPTH: AtomicU32 = AtomicU32::new(0);
 static REVEAL_HIDE: AtomicBool = AtomicBool::new(false);
 /// Where Kodi's windows were before the outermost reveal.
 static REVEAL_ORIGIN: Mutex<Vec<PlacedWindow>> = Mutex::new(Vec::new());
+/// The Kodi Portal just started, kept hidden while it starts; 0 for none.
+static START_GUARD: AtomicU32 = AtomicU32::new(0);
+/// How long a starting Kodi is kept hidden: past the port wait, for the
+/// skin and add-ons that load after the port opens.
+const START_GUARD_FOR: Duration = Duration::from_secs(45);
+const START_GUARD_EVERY: Duration = Duration::from_millis(10);
+
+/// Keeps a Kodi that Portal started hidden while it starts. Starting it
+/// hidden covers its first show, but Kodi can show its main window again as
+/// it starts, placing it on a monitor as it does. Windows reports each show
+/// to this thread as it happens, and the window is hidden at once, before
+/// the screen is next drawn; a look every few milliseconds backs that up.
+/// A reveal for a dialog, or the viewer showing Kodi, is left alone.
+fn guard_start(pid: u32) {
+    START_GUARD.store(pid, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        use windows_sys::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, MsgWaitForMultipleObjects, PeekMessageW, TranslateMessage,
+            EVENT_OBJECT_SHOW, MSG, PM_REMOVE, QS_ALLINPUT, WINEVENT_OUTOFCONTEXT,
+        };
+        // SAFETY: the hook calls back on this thread, which pumps its
+        // messages below and removes the hook before it ends.
+        let hook = unsafe {
+            SetWinEventHook(
+                EVENT_OBJECT_SHOW,
+                EVENT_OBJECT_SHOW,
+                std::ptr::null_mut(),
+                Some(on_start_show),
+                pid,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            )
+        };
+        let deadline = std::time::Instant::now() + START_GUARD_FOR;
+        let wait = START_GUARD_EVERY.as_millis() as u32;
+        let mut msg: MSG = unsafe { std::mem::zeroed() };
+        while std::time::Instant::now() < deadline && START_GUARD.load(Ordering::SeqCst) == pid {
+            unsafe {
+                MsgWaitForMultipleObjects(0, std::ptr::null(), 0, wait, QS_ALLINPUT);
+                while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            if REVEAL_DEPTH.load(Ordering::SeqCst) == 0 {
+                hide_shown(pid);
+            }
+        }
+        if !hook.is_null() {
+            unsafe {
+                UnhookWinEvent(hook);
+            }
+        }
+        let _ = START_GUARD.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
+    });
+}
+
+/// A window of the starting Kodi was shown: hide it again, unless a reveal
+/// has it on screen on purpose or the guard has ended.
+unsafe extern "system" fn on_start_show(
+    _hook: windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK,
+    _event: u32,
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    object: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetWindowThreadProcessId, ShowWindow, GA_ROOT, OBJID_WINDOW, SW_HIDE,
+    };
+    if object != OBJID_WINDOW || hwnd.is_null() {
+        return;
+    }
+    // Only Kodi's own top-level windows; a control inside one is not hidden.
+    if GetAncestor(hwnd, GA_ROOT) != hwnd {
+        return;
+    }
+    let guarded = START_GUARD.load(Ordering::SeqCst);
+    let mut owner = 0u32;
+    GetWindowThreadProcessId(hwnd, &mut owner);
+    if guarded == 0 || owner != guarded || REVEAL_DEPTH.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    ShowWindow(hwnd, SW_HIDE);
+}
+
+/// Hides those of a process's windows that are on screen.
+fn hide_shown(pid: u32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+    for hwnd in windows_of(pid) {
+        if unsafe { IsWindowVisible(hwnd as usize as _) } != 0 {
+            show_hwnd(hwnd, false);
+        }
+    }
+}
+
+/// Stops keeping a starting Kodi hidden: the viewer chose to see it.
+fn end_start_guard() {
+    START_GUARD.store(0, Ordering::SeqCst);
+}
 
 fn windows_of(pid: u32) -> Vec<isize> {
     use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
