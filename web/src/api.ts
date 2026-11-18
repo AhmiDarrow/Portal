@@ -905,6 +905,8 @@ export type CastInfo = {
   lan: boolean;
   bind?: string;
   url?: string | null;
+  /** Set when the listen address changes only after Portal restarts. */
+  restart_needed?: boolean;
 };
 
 export type CastDevice = {
