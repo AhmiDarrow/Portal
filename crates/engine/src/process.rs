@@ -1294,7 +1294,7 @@ impl InputWindow {
             let width = window.width.max(960);
             let height = window.height.max(540);
             // Shown is what lets Kodi animate; on screen it only flashes a black box.
-            let (x, y) = offscreen_spot(window, width, height).unwrap_or((80, 80));
+            let (x, y) = offscreen_spot(window, width, height).unwrap_or_else(beyond_desktop);
             place_window_inactive(window.hwnd, x, y, width, height);
             show_inactive(window.hwnd);
         }
@@ -1395,6 +1395,22 @@ fn offscreen_spot(window: &PlacedWindow, width: i32, height: i32) -> Option<(i32
                 && MonitorFromRect(&spot, MONITOR_DEFAULTTONEAREST) == home
         }
     })
+}
+
+/// Just past the right edge of every monitor together, for when each side
+/// of Kodi's own monitor has another one beside it.
+fn beyond_desktop() -> (i32, i32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    };
+    let (left, width, top) = unsafe {
+        (
+            GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN),
+        )
+    };
+    (left.saturating_add(width).saturating_add(64), top)
 }
 
 /// A spot on the monitor work area. The saved place is kept when it already

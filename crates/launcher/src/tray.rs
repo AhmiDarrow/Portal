@@ -65,7 +65,7 @@ const QUIT_TEXT: &str = "Quit Portal?\n\n\
     Open Portal again from the Start menu or desktop.";
 const RESTART_TEXT: &str = "Restart the Portal server? Anything playing will stop.";
 const LAN_TEXT: &str =
-    "Portal restarts to change who can reach it. Anything playing will stop. Continue?";
+    "Changing who can reach Portal can restart it, which stops anything playing. Continue?";
 const UPDATE_HINT: &str = "Right-click the Portal icon and choose Install update.";
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);

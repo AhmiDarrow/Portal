@@ -13,8 +13,8 @@ type Loaded = {
 };
 
 // The tray icon's menu asks the same questions (crates/launcher/src/tray.rs).
-const RESTART_TEXT = "Restart the Portal server? Anything playing will stop.";
-export const LAN_TEXT = "Portal restarts to change who can reach it. Anything playing will stop. Continue?";
+export const RESTART_TEXT = "Restart the Portal server? Anything playing will stop.";
+const LAN_TEXT = "Changing who can reach Portal can restart it, which stops anything playing. Continue?";
 const QUIT_TEXT =
   "Quit Portal? This stops the Portal server. Anything playing or casting will stop, and Kodi will close if Portal started it.";
 

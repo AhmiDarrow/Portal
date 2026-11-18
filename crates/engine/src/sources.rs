@@ -140,12 +140,16 @@ fn pack_rank(row: &str, cap: u32, preferred: Option<&str>) -> u8 {
     if pack_identity(row).as_deref() == Some(preferred) {
         return 0;
     }
-    // Whole words only, so a remembered name never matches inside a longer word.
-    let words = format!(".{}.", dotted(row));
-    if words.contains(&format!(".{preferred}.")) {
+    if pack_named(row, preferred) {
         return 1;
     }
     2
+}
+
+/// True when `row` names the whole release `id` among its other words,
+/// matched on whole words so a name never matches inside a longer one.
+pub fn pack_named(row: &str, id: &str) -> bool {
+    !id.is_empty() && format!(".{}.", dotted(row)).contains(&format!(".{id}."))
 }
 
 /// The title on the row: the name before the dash, or the longest

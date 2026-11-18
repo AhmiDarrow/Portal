@@ -32,4 +32,4 @@ pub use process::{ProcessConfig, Supervisor};
 pub use prompts::Prompts;
 pub use rpc::{KodiClient, Note, RpcFail};
 pub use settings::Settings;
-pub use sources::{pack_identity, pick_source, row_height};
+pub use sources::{pack_identity, pack_named, pick_source, row_height};

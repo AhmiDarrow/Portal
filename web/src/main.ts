@@ -50,7 +50,7 @@ import {
   type UpdateInfo,
 } from "./api";
 import { awaitAddonPrompts, mount, play, type PlayTarget } from "./player";
-import { LAN_TEXT, restartPortal, wireAppMenu } from "./appmenu";
+import { RESTART_TEXT, restartPortal, wireAppMenu } from "./appmenu";
 import { syncCast } from "./cast";
 import { plainSettingLabel, settingsAddon } from "./settings-link";
 import { currentTheme, mountThemes, setTheme, themeMenu, type ThemeId } from "./themes";
@@ -2431,7 +2431,9 @@ function paintSettings(doc: SettingsDoc): void {
  */
 function tidyLabel(value: string): string {
   const plain = plainSettingLabel(value);
-  const bare = plain.replace(/^[\s\-=*_~>#]+/, "").replace(/[\s\-=*_~<#]+$/, "");
+  // Only runs of two or more, as in "-- Help --" or "==Advanced==": a single
+  // character such as the minus in "-1 = unlimited" is part of the label.
+  const bare = plain.replace(/^\s*[-=*_~>#]{2,}\s*/, "").replace(/\s*[-=*_~<#]{2,}\s*$/, "").trim();
   const text = bare || plain;
   return text.charAt(0).toLocaleUpperCase(PAGE_LOCALE) + text.slice(1);
 }
@@ -2769,7 +2771,7 @@ const CAST_RESTART_TEXT = "Portal needs to restart before this takes effect.";
 
 /** Restarts Portal so the TV setting applies, as the Portal menu does. */
 async function restartForCast(status: Status): Promise<void> {
-  if (castLanBusy || !window.confirm(LAN_TEXT)) return;
+  if (castLanBusy || !window.confirm(RESTART_TEXT)) return;
   castLanBusy = true;
   setNotice("Restarting Portal…");
   try {

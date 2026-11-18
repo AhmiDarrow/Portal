@@ -8,7 +8,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
-use portal_engine::{pack_identity, row_height};
+use portal_engine::{pack_identity, pack_named, row_height};
 
 const CAP: usize = 64;
 const SHOW_LIMIT: usize = 512;
@@ -96,6 +96,12 @@ impl SeasonPacks {
         }
         match pack_identity(&noted.row) {
             Some(id) => self.remember(noted.key, id),
+            // The remembered file, in a row laid out so its name reads
+            // differently: still that file, so it stays remembered.
+            None if self
+                .saved
+                .get(&noted.key)
+                .is_some_and(|id| pack_named(&noted.row, id)) => {}
             None => self.forget(&noted.key),
         }
     }
