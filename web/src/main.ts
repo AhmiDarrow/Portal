@@ -32,6 +32,8 @@ import {
   type MetadataSettings,
   type PairMe,
   type PairedDevice,
+  type AppInfo,
+  type Quality,
   type Prompt,
   type InstallResult,
   type RemoveResult,
@@ -48,10 +50,12 @@ import {
   type UpdateInfo,
 } from "./api";
 import { awaitAddonPrompts, mount, play, type PlayTarget } from "./player";
-import { wireAppMenu } from "./appmenu";
+import { LAN_TEXT, restartPortal, wireAppMenu } from "./appmenu";
 import { syncCast } from "./cast";
 import { plainSettingLabel, settingsAddon } from "./settings-link";
-import { mountThemes } from "./themes";
+import { currentTheme, mountThemes, setTheme, themeMenu, type ThemeId } from "./themes";
+import { DEFAULT_FONTS, FONTS, applyFonts, fonts, setFonts, type FontId } from "./fonts";
+import { QUALITIES, isQuality, prefs, setPrefs } from "./prefs";
 import { showPairing } from "./pair";
 import { cleanEpisodeTitle, episodeCode } from "./titles";
 import { PAGE_LOCALE, esc } from "./html";
@@ -100,6 +104,8 @@ let sourceBusy = false;
 let addonUpdates: AddonUpdate[] | null = null;
 let updatesError = "";
 let updatesChecking = false;
+/** What the last Update did, shown once in the Updates card. */
+let updateFlash = "";
 let sourceFlash = "";
 let clearRepoUrl = false;
 let openRepoId = "";
@@ -127,7 +133,7 @@ const PAGE_TITLES: Record<string, string> = {
   history: "History",
   source: "Source",
   settings: "Add-on settings",
-  server: "Server",
+  server: "Settings",
   cast: "TV",
 };
 
@@ -323,7 +329,8 @@ async function refreshChip(): Promise<void> {
 }
 
 function markNav(page: string): void {
-  const here = page === "" ? "home" : page;
+  // An add-on's settings are reached from Source, so Source stays marked.
+  const here = page === "" ? "home" : page === "settings" ? "source" : page;
   document.querySelectorAll<HTMLAnchorElement>(".top nav a").forEach((link) => {
     const target = (link.getAttribute("href") ?? "").replace(/^#\/?/, "").split("/")[0] || "home";
     if (target === here) link.setAttribute("aria-current", "page");
@@ -356,8 +363,8 @@ async function render(): Promise<void> {
     else if (here.page === "watchlist") await renderList(token, "watchlist");
     else if (here.page === "bookmarks") await renderList(token, "bookmarks");
     else if (here.page === "history") await renderHistory(token);
-    else if (isRemote() && (here.page === "source" || here.page === "settings" || here.page === "server")) {
-      main!.innerHTML = `<h1>Settings</h1><p class="muted">Settings change only on the PC running Portal. This device can watch and cast.</p>`;
+    else if (isRemote() && (here.page === "source" || here.page === "settings")) {
+      main!.innerHTML = `<h1>Source</h1><p class="muted">Add-ons and their settings change only on the PC running Portal. <a href="#/server">Settings</a> for this screen are open here.</p>`;
     } else if (here.page === "source") await renderSource(token);
     else if (here.page === "settings") await renderSettings(token, here.id);
     else if (here.page === "server") await renderServer(token);
@@ -1797,33 +1804,51 @@ function paintSource(addonError: string, repoError: string): void {
   const reopen = openRepoId;
   main!.innerHTML = `
     <h1>Source</h1>
-    <p>Add a repository with a link to the repo site or its zip, and an optional name. Then install a video add-on from that repository, and any module it needs. Remove a repository or a loaded video add-on from this PC. Portal uses whichever loaded video add-on you choose.</p>
-    <form id="repo-zip" class="search">
-      <input id="repo-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" required placeholder="Repo site or zip link" aria-label="Repo site or zip link" />
-      <input id="repo-name" type="text" autocomplete="off" spellcheck="false" maxlength="80" placeholder="Name (optional)" aria-label="Name (optional)" />
-      <button id="repo-install" type="submit">Install</button>
-    </form>
-    <p id="repo-note" class="muted" role="status"></p>
-    <h2>Repositories</h2>
-    <p id="repo-error" class="error"${repoError ? "" : " hidden"}></p>
-    <div id="repo-rows"></div>
-    <div id="repo-videos"${reopen ? "" : " hidden"}>
-      <h2 id="repo-video-title"></h2>
+    ${jumpBar([
+      ["source-loaded", "Video add-ons"],
+      ["source-updates", "Updates"],
+      ["source-repos", "Repositories"],
+      ["source-add", "Add a repository"],
+    ])}
+    <section class="server-card source-card" id="source-loaded">
+      <h2>Video add-ons</h2>
+      <p class="muted">Portal browses and plays from the add-on you use. Settings opens that add-on's own options.</p>
+      <p id="source-current"></p>
+      <p id="loaded-error" class="error"${addonError ? "" : " hidden"}></p>
       <div class="search">
-        <input id="repo-filter" type="search" placeholder="Filter this repository" autocomplete="off" spellcheck="false" aria-label="Filter this repository" />
+        <input id="source-filter" type="search" placeholder="Filter video add-ons" autocomplete="off" spellcheck="false" aria-label="Filter video add-ons" />
       </div>
-      <div id="repo-video-rows"></div>
-    </div>
-    <div class="row section-head"><h2>Updates</h2><button id="update-check" type="button" class="quiet">Check now</button></div>
-    <p id="update-note" class="muted" role="status"></p>
-    <div id="update-rows"></div>
-    <h2>Loaded video add-ons</h2>
-    <p id="source-current" class="muted"></p>
-    <p id="loaded-error" class="error"${addonError ? "" : " hidden"}></p>
-    <div class="search">
-      <input id="source-filter" type="search" placeholder="Filter loaded add-ons" autocomplete="off" spellcheck="false" aria-label="Filter loaded add-ons" />
-    </div>
-    <div id="loaded-rows"></div>
+      <div id="loaded-rows"></div>
+    </section>
+    <section class="server-card source-card" id="source-updates">
+      <div class="row section-head"><h2>Updates</h2><button id="update-check" type="button" class="quiet">Check now</button></div>
+      <p class="muted">Newer versions of the add-ons and modules on this PC, from their repositories.</p>
+      <p id="update-note" role="status"></p>
+      <div id="update-rows"></div>
+    </section>
+    <section class="server-card source-card" id="source-repos">
+      <h2>Repositories</h2>
+      <p class="muted">Open a repository to install video add-ons from it, and any module they need. Removing a repository keeps the add-ons installed from it.</p>
+      <p id="repo-error" class="error"${repoError ? "" : " hidden"}></p>
+      <div id="repo-rows"></div>
+      <div id="repo-videos"${reopen ? "" : " hidden"}>
+        <h3 id="repo-video-title"></h3>
+        <div class="search">
+          <input id="repo-filter" type="search" placeholder="Filter this repository" autocomplete="off" spellcheck="false" aria-label="Filter this repository" />
+        </div>
+        <div id="repo-video-rows"></div>
+      </div>
+    </section>
+    <section class="server-card source-card" id="source-add">
+      <h2>Add a repository</h2>
+      <p class="muted">Paste a link to the repository's site or its zip file. The name is optional.</p>
+      <form id="repo-zip" class="search">
+        <input id="repo-url" type="url" inputmode="url" autocomplete="off" spellcheck="false" required placeholder="Site or zip link" aria-label="Repository site or zip link" />
+        <input id="repo-name" type="text" autocomplete="off" spellcheck="false" maxlength="80" placeholder="Name (optional)" aria-label="Name (optional)" />
+        <button id="repo-install" type="submit">Install</button>
+      </form>
+      <p id="repo-note" class="muted" role="status"></p>
+    </section>
   `;
   const repoErrorNode = document.getElementById("repo-error");
   if (repoErrorNode) repoErrorNode.textContent = repoError;
@@ -1832,8 +1857,8 @@ function paintSource(addonError: string, repoError: string): void {
   const current = document.getElementById("source-current");
   if (current) {
     current.textContent = loadedSource?.name
-      ? "Current source: " + displayName(loadedSource.name, "Chosen add-on")
-      : "No source chosen yet.";
+      ? "In use: " + displayName(loadedSource.name, "Chosen add-on")
+      : "No add-on in use yet. Choose Use on one below.";
   }
   if (flash) setRepoNote(flash);
   if (clearRepoUrl) {
@@ -1893,11 +1918,14 @@ function paintUpdateRows(): void {
   if (!note || !host) return;
   if (button instanceof HTMLButtonElement) button.disabled = updatesChecking;
   const items = addonUpdates ?? [];
+  note.className = updatesError ? "error" : "muted";
   if (updatesChecking) note.textContent = "Checking the repositories…";
   else if (updatesError) note.textContent = updatesError;
+  else if (updateFlash) note.textContent = updateFlash;
   else if (addonUpdates === null) note.textContent = "";
   else if (!items.length) note.textContent = "Every add-on is up to date.";
   else note.textContent = items.length === 1 ? "1 add-on has an update." : items.length + " add-ons have an update.";
+  updateFlash = "";
   host.innerHTML = items.map(updateRow).join("");
 }
 
@@ -1926,24 +1954,22 @@ function updateNote(result: InstallResult, version: string): string {
 
 async function updateAddon(id: string): Promise<void> {
   if (sourceBusy) return;
-  if (!addonIdOk(id)) {
-    setRepoNote("Unknown add-on.");
-    return;
-  }
+  if (!addonIdOk(id)) return;
   const item = addonUpdates?.find((entry) => entry.id === id);
   const name = displayName(item?.name ?? "", "");
   sourceBusy = true;
-  setRepoNote("");
+  updatesError = "";
   const ticket = showPage(describeAddonUpdate(name));
   let handed = false;
   try {
     const result = await api.updateAddon(id);
-    sourceFlash = updateNote(result, item?.available ?? "");
+    updateFlash = updateNote(result, item?.available ?? "");
     addonUpdates = (addonUpdates ?? []).filter((entry) => entry.id !== id);
     handed = true;
     await render();
   } catch (err) {
-    setRepoNote(detail(err));
+    updatesError = detail(err);
+    paintUpdateRows();
   } finally {
     sourceBusy = false;
     if (!handed) hideTicket(ticket);
@@ -2109,7 +2135,7 @@ function paintLoadedRows(): void {
   const query = queryValue("source-filter");
   const items = loadedAddons.filter((addon) => matchesQuery(query, [addon.name, addon.id]));
   if (!loadedAddons.length) {
-    host.innerHTML = `<p class="muted">No video add-ons are enabled.</p>`;
+    host.innerHTML = `<p class="muted">No video add-ons are installed. Install one from a repository below.</p>`;
     return;
   }
   if (!items.length) {
@@ -2129,13 +2155,13 @@ function addonRow(addon: AddonCard, current: boolean): string {
     <article class="addon${current ? " current" : ""}">
       ${artBlock(addon.art, displayName(addon.name, "Add-on"))}
       <div class="grow">
-        <strong>${esc(displayName(addon.name, "Add-on"))}</strong>
+        <strong>${esc(displayName(addon.name, "Add-on"))}</strong>${current ? ` <span class="in-use">In use</span>` : ""}
         <div class="muted">${esc(addon.id)}${updateFor(addon.id)}</div>
       </div>
       <div class="row-actions">
-        <a href="${esc(settingsHref(addon.id))}">Settings</a>
+        <button type="button"${current ? ` class="primary"` : ""} data-act="${act(() => void chooseSource(addon))}">${current ? "Open" : "Use"}</button>
+        <a class="action-link" href="${esc(settingsHref(addon.id))}">Settings</a>
         ${remove}
-        <button type="button" data-act="${act(() => void chooseSource(addon))}">${current ? "Open" : "Use"}</button>
       </div>
     </article>
   `;
@@ -2350,16 +2376,20 @@ async function useInstalled(item: RepoAddon): Promise<void> {
 
 async function renderSettings(token: number, id: string): Promise<void> {
   if (!id) {
-    main!.innerHTML = `<p class="error">Choose a video add-on first.</p>`;
+    main!.innerHTML = `<p class="error">Choose a video add-on first. <a href="#/source">Go to Source</a></p>`;
     return;
   }
   let open = true;
   showPage(describeSettings(false));
   noteKodi(token, () => open, describeSettings(true));
+  // Opened from a link rather than the Source page: fetch the add-on's name too.
+  const names = loadedAddons.length ? null : api.addons().catch(() => null);
   try {
     const doc = await api.settings(id);
+    const listed = await names;
     open = false;
     if (token !== renderToken) return;
+    if (listed && !loadedAddons.length) loadedAddons = listed.items;
     if (categoryAddon !== doc.addon_id) {
       categoryAddon = doc.addon_id;
       categoryIndex = 0;
@@ -2385,26 +2415,46 @@ function paintSettings(doc: SettingsDoc): void {
     .join("");
   const category = doc.categories[categoryIndex];
   const fields = category ? category.fields.map((field) => fieldHtml(doc.addon_id, field)).join("") : `<p class="muted">No settings in this category.</p>`;
+  const name = plainSettingLabel(loadedAddons.find((addon) => addon.id === doc.addon_id)?.name ?? "");
   main!.innerHTML = `
-    <div class="row"><h1>Settings</h1><a href="#/source">Source</a></div>
-    <p class="muted">${esc(doc.addon_id)}</p>
-    <div class="cats">${cats}</div>
-    ${fields}
+    <h1>${esc(name || doc.addon_id)}</h1>
+    <p class="muted">Add-on settings · <a href="#/source">Back to Source</a></p>
+    <nav class="cats setting-cats" aria-label="Categories">${cats}</nav>
+    <section class="server-card setting-list">${fields}</section>
   `;
   wireSettings(doc);
 }
 
+/**
+ * A label as a person reads it: no decoration such as "-- Help --", and a
+ * capital first letter. Any add-on's labels get the same tidying.
+ */
+function tidyLabel(value: string): string {
+  const plain = plainSettingLabel(value);
+  const bare = plain.replace(/^[\s\-=*_~>#]+/, "").replace(/[\s\-=*_~<#]+$/, "");
+  const text = bare || plain;
+  return text.charAt(0).toLocaleUpperCase(PAGE_LOCALE) + text.slice(1);
+}
+
+/**
+ * One add-on setting as a row: its name on the left and its control on the
+ * right (stacked at phone width), with a status line under both. Every kind
+ * keeps the same shape, so a long list reads down one edge.
+ */
 function fieldHtml(addonId: string, field: SettingsField): string {
-  const label = plainSettingLabel(field.label);
-  if (field.kind === "header") return `<h3>${esc(label)}</h3>`;
+  const label = tidyLabel(field.label);
+  if (field.kind === "header") return `<h3 class="setting-head">${esc(label)}</h3>`;
   const id = field.id ?? "";
   // Ties each label to its control, for screen readers and for clicking the label.
   const fid = "setting-" + id.replace(/[^A-Za-z0-9_-]/g, "_");
   const disabled = field.enabled ? "" : " disabled";
-  let control = "";
+  const name = `<label class="setting-name" for="${fid}">${esc(label)}</label>`;
+  let row = "";
+  let shape = "";
   if (field.kind === "bool") {
     const checked = field.value === "true" ? " checked" : "";
-    control = `<label class="check"><input type="checkbox" data-setting="${esc(id)}" data-kind="bool"${checked}${disabled} /> ${esc(label)}</label>`;
+    shape = " is-compact";
+    row = `${name}<div class="setting-control"><input id="${fid}" class="toggle" type="checkbox" role="switch" data-setting="${esc(id)}" data-kind="bool"${checked}${disabled} /></div>`;
   } else if (field.kind === "select") {
     const options = (field.options ?? [])
       .map((option) => {
@@ -2412,27 +2462,31 @@ function fieldHtml(addonId: string, field: SettingsField): string {
         return `<option value="${esc(option.value)}"${selected}>${esc(plainSettingLabel(option.label))}</option>`;
       })
       .join("");
-    control = `<label for="${fid}">${esc(label)}</label><select id="${fid}" data-setting="${esc(id)}" data-kind="select"${disabled}>${options}</select>`;
+    row = `${name}<div class="setting-control"><select id="${fid}" data-setting="${esc(id)}" data-kind="select"${disabled}>${options}</select></div>`;
   } else if (field.kind === "action") {
     const settingsId = settingsAddon(field.action ?? "");
+    const text = `<span class="setting-name">${esc(label)}</span>`;
+    shape = " is-compact";
     if (settingsId) {
-      control = `<a class="action-link" href="${esc(settingsHref(settingsId))}">${esc(label)}</a>`;
+      row = `${text}<div class="setting-control"><a class="action-link" href="${esc(settingsHref(settingsId))}" aria-label="${esc(label)}">Open settings</a></div>`;
     } else if (!id && field.action) {
-      control = `<button type="button" data-run="${esc(field.action)}" data-kind="action"${disabled}>${esc(label)}</button>`;
+      row = `${text}<div class="setting-control"><button type="button" data-run="${esc(field.action)}" data-kind="action" data-label="${esc(label)}" aria-label="${esc(label)}"${disabled}>Run</button></div>`;
     } else {
       // What the action last stored, as Kodi shows beside the button.
       const shown = plainSettingLabel(field.value);
       const hidden = shown ? "" : " hidden";
-      control = `<button type="button" data-setting="${esc(id)}" data-kind="action"${disabled}>${esc(label)}</button><span class="setting-value" data-value-for="${esc(id)}"${hidden}>${esc(shown)}</span>`;
+      // A stored value needs room beside its button; a bare button does not.
+      if (shown) shape = "";
+      row = `${text}<div class="setting-control"><span class="setting-value" data-value-for="${esc(id)}"${hidden}>${esc(shown)}</span><button type="button" data-setting="${esc(id)}" data-kind="action" data-label="${esc(label)}" aria-label="${esc(label)}"${disabled}>${shown ? "Change" : "Run"}</button></div>`;
     }
   } else if (field.kind === "secret") {
-    control = `<label for="${fid}">${esc(label)}</label><input id="${fid}" type="password" data-setting="${esc(id)}" data-kind="secret" autocomplete="off" placeholder="Leave blank to keep the saved secret"${disabled} />`;
+    row = `${name}<div class="setting-control"><input id="${fid}" type="password" data-setting="${esc(id)}" data-kind="secret" autocomplete="off" placeholder="Leave blank to keep it"${disabled} /></div>`;
   } else if (field.kind === "number") {
-    control = `<label for="${fid}">${esc(label)}</label><input id="${fid}" type="number" data-setting="${esc(id)}" data-kind="number" value="${esc(field.value)}"${disabled} />`;
+    row = `${name}<div class="setting-control"><input id="${fid}" type="number" data-setting="${esc(id)}" data-kind="number" value="${esc(field.value)}"${disabled} /></div>`;
   } else {
-    control = `<label for="${fid}">${esc(label)}</label><input id="${fid}" type="text" data-setting="${esc(id)}" data-kind="text" value="${esc(field.value)}"${disabled} />`;
+    row = `${name}<div class="setting-control"><input id="${fid}" type="text" data-setting="${esc(id)}" data-kind="text" value="${esc(field.value)}"${disabled} /></div>`;
   }
-  return `<div class="setting" data-addon="${esc(addonId)}">${control}<div class="note" role="status"></div></div>`;
+  return `<div class="setting${shape}${field.enabled ? "" : " is-off"}" data-addon="${esc(addonId)}">${row}<div class="note" role="status"></div></div>`;
 }
 
 function wireSettings(doc: SettingsDoc): void {
@@ -2443,7 +2497,7 @@ function wireSettings(doc: SettingsDoc): void {
     node.addEventListener("click", () => {
       if (node.disabled || !target) return;
       node.disabled = true;
-      void runAddonAction({ id: target, label: node.textContent || "", path: target, kind: "run" }).finally(() => {
+      void runAddonAction({ id: target, label: node.dataset.label || node.textContent || "", path: target, kind: "run" }).finally(() => {
         if (node.isConnected) node.disabled = false;
         void refreshSettings(doc);
       });
@@ -2459,7 +2513,7 @@ function wireSettings(doc: SettingsDoc): void {
         // An add-on action can take a while; a second click would run it twice.
         if (node.disabled) return;
         node.disabled = true;
-        void runAction(addonId, settingId, note, node.textContent || "").finally(() => {
+        void runAction(addonId, settingId, note, node.dataset.label || node.textContent || "").finally(() => {
           node.disabled = false;
           void refreshSettings(doc);
         });
@@ -2488,7 +2542,6 @@ function wireSettings(doc: SettingsDoc): void {
   });
 }
 
-/** Sets a field's value in the loaded settings (only over `from`, when given); answers the value it had. */
 /**
  * An action is the add-on changing its own settings, so the form is read
  * again and shows what it stored. A field being typed in is left alone.
@@ -2517,6 +2570,8 @@ function paintSetting(addonId: string, settingId: string, value: string): void {
         const shown = plainSettingLabel(value);
         node.textContent = shown;
         node.hidden = !shown;
+        const button = node.parentElement?.querySelector<HTMLButtonElement>("button[data-kind='action']");
+        if (button) button.textContent = shown ? "Change" : "Run";
         return;
       }
       if (node.dataset.setting !== settingId || node === document.activeElement) return;
@@ -2529,6 +2584,7 @@ function paintSetting(addonId: string, settingId: string, value: string): void {
   });
 }
 
+/** Sets a field's value in the loaded settings (only over `from`, when given); answers the value it had. */
 function noteSetting(doc: SettingsDoc, settingId: string, value: string, from?: string): string | null {
   let before: string | null = null;
   for (const category of doc.categories) {
@@ -2687,11 +2743,13 @@ function castSection(status: Status): string {
   const on = serverCast?.lan === true;
   const href = castPageUrl(serverCast?.url ?? "");
   const link = href
-    ? `<p class="cast-url">Open this on a TV. <a href="${esc(href)}">${esc(href)}</a></p>`
+    ? `<p class="cast-url">Open this address on a TV: <a href="${esc(href)}">${esc(href)}</a></p>`
     : on
       ? `<p class="muted cast-url">The cast link appears when Portal reports an address.</p>`
       : "";
-  const restart = serverCast?.restartNeeded ? `<p class="muted">Portal must restart to change the listen address.</p>` : "";
+  const restart = serverCast?.restartNeeded
+    ? `<div class="row cast-restart"><span class="muted">${esc(CAST_RESTART_TEXT)}</span><button type="button" data-act="${act(() => void restartForCast(status))}"${castLanBusy ? " disabled" : ""}>Restart Portal</button></div>`
+    : "";
   const error = serverCastError ? `<p class="error">${esc(serverCastError)}</p>` : "";
   return `
     <section class="server-card" id="server-cast">
@@ -2707,6 +2765,25 @@ function castSection(status: Status): string {
   `;
 }
 
+const CAST_RESTART_TEXT = "Portal needs to restart before this takes effect.";
+
+/** Restarts Portal so the TV setting applies, as the Portal menu does. */
+async function restartForCast(status: Status): Promise<void> {
+  if (castLanBusy || !window.confirm(LAN_TEXT)) return;
+  castLanBusy = true;
+  setNotice("Restarting Portal…");
+  try {
+    await restartPortal();
+  } catch (err) {
+    setNotice("");
+    serverCastError = detail(err);
+  } finally {
+    castLanBusy = false;
+  }
+  // Only reached when the restart failed: a restart reloads the page.
+  keepFocus(main!, () => paintServer(status, ""));
+}
+
 async function toggleCastLan(status: Status): Promise<void> {
   if (castLanBusy) return;
   const nextLan = serverCast?.lan !== true;
@@ -2715,7 +2792,7 @@ async function toggleCastLan(status: Status): Promise<void> {
   try {
     await saveCastLan(nextLan);
     if (token !== renderToken) return;
-    setNotice(serverCast?.restartNeeded ? "Portal must restart to change the listen address." : "");
+    setNotice("");
     keepFocus(main!, () => paintServer(status, ""));
   } catch (err) {
     serverCastError = detail(err);
@@ -2726,46 +2803,245 @@ async function toggleCastLan(status: Status): Promise<void> {
   }
 }
 
+
+const QUALITY_NAMES: Record<Quality, string> = {
+  auto: "Auto",
+  source: "Source",
+  "2160": "4K",
+  "1080": "1080p",
+  "720": "720p",
+  "480": "480p",
+};
+
+let serverApp: AppInfo | null = null;
+let serverAppError = "";
+let appBusy = false;
+
+async function refreshApp(): Promise<void> {
+  try {
+    serverApp = await api.app();
+    serverAppError = "";
+  } catch (err) {
+    serverApp = null;
+    serverAppError = detail(err);
+  }
+}
+
+/** One On/Off row, styled and labelled the same way in every card. */
+function switchRow(id: string, label: string, on: boolean, run: () => void, disabled = false): string {
+  return `
+      <div class="row">
+        <span id="${id}-label">${esc(label)}</span>
+        <button type="button" id="${id}" role="switch" aria-checked="${on ? "true" : "false"}" aria-labelledby="${id}-label" data-act="${act(run)}"${disabled ? " disabled" : ""}>${on ? "On" : "Off"}</button>
+      </div>`;
+}
+
+/** One labelled drop-down row; `wireSelect` handles its changes. */
+function selectRow(id: string, label: string, options: [string, string][], value: string): string {
+  const items = options
+    .map(([key, name]) => `<option value="${esc(key)}"${key === value ? " selected" : ""}>${esc(name)}</option>`)
+    .join("");
+  return `
+      <div class="row select-row">
+        <label for="${id}">${esc(label)}</label>
+        <select id="${id}">${items}</select>
+      </div>`;
+}
+
+function wireSelect(id: string, change: (value: string) => void): void {
+  const node = document.getElementById(id);
+  if (node instanceof HTMLSelectElement) node.addEventListener("change", () => change(node.value));
+}
+
+/** Redraws one card in place, keeping the keyboard on the same control. */
+function repaintCard(id: string, html: () => string, wire?: () => void): void {
+  const node = document.getElementById(id);
+  if (!node) return;
+  const focused = document.activeElement instanceof HTMLElement && node.contains(document.activeElement) ? document.activeElement.id : "";
+  node.outerHTML = html();
+  wire?.();
+  if (focused) document.getElementById(focused)?.focus();
+}
+
+function lookSection(): string {
+  const chosen = fonts();
+  const faces = FONTS.map((font): [string, string] => [font.id, font.name]);
+  return `
+    <section class="server-card" id="server-look">
+      <h2>Appearance</h2>
+      <p class="muted">Applies to this browser only, so each screen can look its own way.</p>
+      ${selectRow("look-theme", "Theme", themeMenu.map((item): [string, string] => [item.id, item.name]), currentTheme())}
+      ${selectRow("look-text", "Text font", faces, chosen.text)}
+      ${selectRow("look-headings", "Heading font", faces, chosen.headings)}
+      <div class="font-sample" aria-hidden="true">
+        <p class="font-sample-head">Continue watching</p>
+        <p>Season 2 · Episode 5 — 42 min left. Àéîõü Ωμέγα Привет 0123456789</p>
+      </div>
+      <div class="row"><button type="button" data-act="${act(() => {
+        setFonts(DEFAULT_FONTS);
+        repaintCard("server-look", lookSection, wireLook);
+      })}">Use Portal's fonts</button></div>
+    </section>
+  `;
+}
+
+function wireLook(): void {
+  wireSelect("look-theme", (value) => setTheme(value as ThemeId));
+  wireSelect("look-text", (value) => setFonts({ text: value as FontId }));
+  wireSelect("look-headings", (value) => setFonts({ headings: value as FontId }));
+}
+
+function playbackSection(): string {
+  const now = prefs();
+  const qualities = QUALITIES.map((quality): [string, string] => [quality, QUALITY_NAMES[quality]]);
+  return `
+    <section class="server-card" id="server-playback">
+      <h2>Playback</h2>
+      <p class="muted">Shared by every screen that opens Portal, and by the TV. The player's own controls change the same choices.</p>
+      ${selectRow("play-quality", "Quality", qualities, now.quality)}
+      ${switchRow("play-subs", "Turn subtitles on when a video starts", now.subtitles !== "off", () => {
+        setPrefs({ subtitles: prefs().subtitles === "off" ? "auto" : "off", subtitlesSet: true });
+        repaintCard("server-playback", playbackSection, wirePlayback);
+      })}
+      ${switchRow("play-next", "Play the next episode automatically", now.autoplay, () => {
+        setPrefs({ autoplay: !prefs().autoplay });
+        repaintCard("server-playback", playbackSection, wirePlayback);
+      })}
+      <p class="muted">Quality applies from the next video you start. Subtitle languages are under Subtitles.</p>
+    </section>
+  `;
+}
+
+function wirePlayback(): void {
+  wireSelect("play-quality", (value) => {
+    if (isQuality(value)) setPrefs({ quality: value });
+  });
+}
+
+const CARD_NAMES: Record<string, string> = { nvidia: "NVIDIA", intel: "Intel", amd: "AMD" };
+
+/** The Portal program on this PC: what the Portal menu and the tray icon also offer. */
+function appSection(): string {
+  const app = serverApp;
+  const busy = appBusy;
+  const card = app?.encoder ? CARD_NAMES[app.encoder.card] : undefined;
+  const hardware = card !== undefined && app?.encoder?.hardware === true;
+  const encoding = !app?.encoder
+    ? ""
+    : card
+      ? `Video is encoded by ${hardware ? `the ${card} graphics card` : "the processor"}. A change applies from the next video you start.`
+      : "Video is encoded by the processor: Portal found no graphics card it can use.";
+  const autostart = typeof app?.autostart === "boolean";
+  return `
+    <section class="server-card" id="server-app">
+      <h2>Portal on this PC</h2>
+      ${switchRow("app-encoder", "Encode video on the graphics card", hardware, () => void saveApp("encoder", !hardware), busy || !card)}
+      ${encoding ? `<p class="muted">${esc(encoding)}</p>` : ""}
+      ${switchRow("app-autostart", "Start with Windows", app?.autostart === true, () => void saveApp("autostart", app?.autostart !== true), busy || !app?.tray || !autostart)}
+      ${app && !app.tray ? `<p class="muted">Start with Windows needs Portal's tray icon, which is not installed here.</p>` : ""}
+      ${serverAppError ? `<p class="error" role="alert">${esc(serverAppError)}</p>` : ""}
+    </section>
+  `;
+}
+
+async function saveApp(what: "encoder" | "autostart", on: boolean): Promise<void> {
+  if (appBusy) return;
+  appBusy = true;
+  try {
+    serverApp = what === "encoder" ? await api.appEncoder(on) : await api.appAutostart(on);
+    serverAppError = "";
+  } catch (err) {
+    serverAppError = detail(err);
+  } finally {
+    appBusy = false;
+  }
+  repaintCard("server-app", appSection);
+}
+
+/** Buttons that jump down the long Settings page, most useful on a phone. */
+function jumpBar(sections: [string, string][]): string {
+  const buttons = sections
+    .map(
+      ([id, name]) =>
+        `<button type="button" data-act="${act(() => {
+          const target = document.getElementById(id);
+          target?.scrollIntoView({ behavior: "smooth", block: "start" });
+        })}">${esc(name)}</button>`,
+    )
+    .join("");
+  return `<nav class="cats jump-bar" aria-label="Sections">${buttons}</nav>`;
+}
+
 async function renderServer(token: number): Promise<void> {
+  if (isRemote()) {
+    paintRemoteSettings();
+    return;
+  }
   const [status] = await Promise.all([api.status(), refreshUpdate()]);
   if (token !== renderToken) return;
-  await Promise.all([refreshServerCast(), refreshMeta(), refreshSubs(), refreshDevices()]);
+  await Promise.all([refreshServerCast(), refreshMeta(), refreshSubs(), refreshDevices(), refreshApp()]);
   if (token !== renderToken) return;
-  if (serverCast?.restartNeeded) setNotice("Portal must restart to change the listen address.");
   paintServer(status, "");
 }
 
 function paintServer(status: Status, message: string): void {
   const lines = [
-    ["State", status.state],
+    ["State", status.state.charAt(0).toUpperCase() + status.state.slice(1)],
     ["Version", status.version || ""],
-    ["Process", status.pid ? String(status.pid) : ""],
+    ["Process ID", status.pid ? String(status.pid) : ""],
     ["Started by Portal", status.started_by_us ? "Yes" : "No"],
     ["Window", status.window_visible ? "Shown" : "Hidden"],
     ["Web server", status.webserver ? "On" : "Off"],
   ];
-  const facts = lines.map(([label, value]) => `<div class="row"><span class="muted">${esc(label)}</span><span>${esc(value)}</span></div>`).join("");
+  const facts = lines.map(([label, value]) => `<div class="row fact"><span class="muted">${esc(label)}</span><span>${esc(value)}</span></div>`).join("");
   const error = status.error || message;
+  const sections: [string, string][] = [
+    ["server-look", "Appearance"],
+    ["server-playback", "Playback"],
+    ["server-app", "Portal"],
+    ["server-cast", "Cast"],
+  ];
+  if (pairInfo?.this_pc) sections.push(["server-devices", "Devices"]);
+  sections.push(["server-subs", "Subtitles"], ["server-media", "Media info"], ["server-engine", "Kodi"], ["server-update", "Updates"]);
   main!.innerHTML = `
-    <h1>Server</h1>
-    <section class="server-card">
+    <h1>Settings</h1>
+    ${jumpBar(sections)}
+    ${lookSection()}
+    ${playbackSection()}
+    ${appSection()}
+    ${castSection(status)}
+    ${devicesSection()}
+    ${subsSection()}
+    ${mediaSection()}
+    <section class="server-card" id="server-engine">
+      <h2>Kodi engine</h2>
       ${facts}
       ${error ? `<p class="error">${esc(error)}</p>` : ""}
       <div class="row">
-        <button type="button" data-act="${act(() => void serverCall("window", status))}">${status.window_visible ? "Hide window" : "Show window"}</button>
-        <button type="button" data-act="${act(() => void serverCall("restart", status))}">Restart</button>
-        <button type="button" data-act="${act(() => void serverCall("quit", status))}">Quit</button>
+        <button type="button" data-act="${act(() => void serverCall("window", status))}">${status.window_visible ? "Hide Kodi window" : "Show Kodi window"}</button>
+        <button type="button" data-act="${act(() => void serverCall("restart", status))}">Restart Kodi engine</button>
+        <button type="button" data-act="${act(() => void serverCall("quit", status))}">Close Kodi engine</button>
       </div>
     </section>
-    ${castSection(status)}
-    ${devicesSection()}
-    ${mediaSection()}
-    ${subsSection()}
     ${updateSection()}
   `;
+  wireLook();
+  wirePlayback();
   wireMedia();
   wireSubs();
   wireDevices();
+}
+
+/** A phone, tablet or TV keeps its own look and shares playback choices; the rest is the PC's. */
+function paintRemoteSettings(): void {
+  main!.innerHTML = `
+    <h1>Settings</h1>
+    ${lookSection()}
+    ${playbackSection()}
+    <p class="muted">Add-ons, casting, subtitles services and the rest of Portal's settings change on the PC running Portal.</p>
+  `;
+  wireLook();
+  wirePlayback();
 }
 
 async function refreshDevices(): Promise<void> {
@@ -2904,11 +3180,12 @@ function mediaSection(): string {
       <form id="tmdb-form" class="media-key">
         <label for="tmdb-key">TMDB API key (optional, for richer info)</label>
         <div class="search">
-          <input id="tmdb-key" type="password" autocomplete="off" spellcheck="false" placeholder="${meta.tmdb ? "Paste a new key to replace it" : "Paste a TMDB API key"}" aria-describedby="tmdb-state${serverMetaError ? " tmdb-error" : ""}" />
+          <input id="tmdb-key" type="password" autocomplete="off" spellcheck="false" placeholder="${meta.tmdb ? "Paste a new key" : "Paste a TMDB API key"}" aria-describedby="tmdb-state tmdb-hint${serverMetaError ? " tmdb-error" : ""}" />
           <button type="submit"${busy}>Save</button>
           ${remove}
         </div>
         <p id="tmdb-state" class="${meta.tmdb ? "key-saved" : "muted"}">${esc(state)}</p>
+        <p id="tmdb-hint" class="muted">A free key comes from your account on themoviedb.org → Settings → API.</p>
       </form>
       ${serverMetaNote ? `<p class="muted">${esc(serverMetaNote)}</p>` : ""}
       ${serverMetaError ? `<p class="error" id="tmdb-error">${esc(serverMetaError)}</p>` : ""}
@@ -3014,10 +3291,10 @@ function subKeyPut(source: SubKeySource, value: string | null): SubtitleSettings
   return source.id === "subdl" ? { subdl_key: value } : { subsource_key: value };
 }
 
-/** "A and B", or "A, B, and C". */
+/** "A and B", or "A, B and C". */
 function spokenList(items: string[]): string {
   if (items.length < 3) return items.join(" and ");
-  return items.slice(0, -1).join(", ") + ", and " + items[items.length - 1];
+  return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
 }
 
 function subKeyForm(source: SubKeySource, saved: boolean, busy: string): string {
@@ -3029,7 +3306,7 @@ function subKeyForm(source: SubKeySource, saved: boolean, busy: string): string 
       <form id="${field}-form" class="media-key">
         <label for="${field}">${esc(source.name)} API key (optional, adds ${esc(source.name)} results)</label>
         <div class="search">
-          <input id="${field}" type="password" autocomplete="off" spellcheck="false" placeholder="${saved ? "Paste a new key to replace it" : "Paste a " + esc(source.name) + " API key"}" aria-describedby="${field}-state ${field}-hint${serverSubsError ? " subs-error" : ""}" />
+          <input id="${field}" type="password" autocomplete="off" spellcheck="false" placeholder="${saved ? "Paste a new key" : "Paste a " + esc(source.name) + " API key"}" aria-describedby="${field}-state ${field}-hint${serverSubsError ? " subs-error" : ""}" />
           <button type="submit"${busy}>Save</button>
           ${remove}
         </div>
@@ -3094,7 +3371,7 @@ function subsSection(): string {
   return `
     <section class="server-card" id="server-subs">
       <h2>Subtitles</h2>
-      <p class="muted">The CC button finds subtitles for what you play: Gestdown and TVsubtitles for TV shows, Subtitle Cat for both (machine translations marked), and OpenSubtitles, SubDL and SubSource for both when their keys are saved. Searching sends the title, year, and season and episode to ${esc(spokenList(services))}.</p>
+      <p class="muted">The CC button finds subtitles for what you play. Gestdown and TVsubtitles cover TV shows, Subtitle Cat covers films and TV shows (machine translations are marked), and OpenSubtitles, SubDL and SubSource join in once their keys are saved. Searching sends the title, year, season and episode to ${esc(spokenList(services))}.</p>
       <div class="subs-langs">
         <span id="subs-langs-label">Preferred languages${saved ? "" : " (from your browser)"}</span>
         <ol class="lang-chips" aria-labelledby="subs-langs-label">${chips}</ol>
@@ -3111,7 +3388,7 @@ function subsSection(): string {
       <form id="subs-key-form" class="media-key">
         <label for="subs-key">OpenSubtitles API key (optional, adds OpenSubtitles results)</label>
         <div class="search">
-          <input id="subs-key" type="password" autocomplete="off" spellcheck="false" placeholder="${subs.opensubtitles ? "Paste a new key to replace it" : "Paste an OpenSubtitles API key"}" aria-describedby="subs-key-state subs-key-hint${serverSubsError ? " subs-error" : ""}" />
+          <input id="subs-key" type="password" autocomplete="off" spellcheck="false" placeholder="${subs.opensubtitles ? "Paste a new key" : "Paste an OpenSubtitles API key"}" aria-describedby="subs-key-state subs-key-hint${serverSubsError ? " subs-error" : ""}" />
           <button type="submit"${busy}>Save</button>
           ${removeKey}
         </div>
@@ -3320,7 +3597,7 @@ function updateSection(): string {
   return `
     <section class="server-card update-card" id="server-update">
       <h2>Updates</h2>
-      <div class="row"><span class="muted">Portal version</span><span>${esc(info.current)}</span></div>
+      <div class="row fact"><span class="muted">Portal version</span><span>${esc(info.current)}</span></div>
       ${line ? `<p class="update-line">${esc(line)}</p>` : ""}
       ${meter}
       ${problem ? `<p class="${problemClass}">${esc(problem)}</p>` : ""}
@@ -3479,6 +3756,7 @@ document.addEventListener(
   true,
 );
 mountThemes();
+applyFonts();
 window.addEventListener("portal:pair", () => showPairing());
 void (async () => {
   // A Portal that is still starting may not answer yet; ask a few times
@@ -3510,7 +3788,7 @@ function startApp(): void {
     // Settings live on the PC; this device only watches and casts.
     document.body.classList.add("remote");
     document
-      .querySelectorAll<HTMLAnchorElement>('a[href="#/source"], a[href="#/server"], #update-pill')
+      .querySelectorAll<HTMLAnchorElement>('a[href="#/source"], #update-pill')
       .forEach((link) => link.remove());
   }
   void render();

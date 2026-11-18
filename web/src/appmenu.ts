@@ -12,9 +12,11 @@ type Loaded = {
   app: AppInfo | null;
 };
 
+// The tray icon's menu asks the same questions (crates/launcher/src/tray.rs).
 const RESTART_TEXT = "Restart the Portal server? Anything playing will stop.";
-const LAN_TEXT = "Portal restarts to change who can reach it. Anything playing will stop. Continue?";
-const QUIT_TEXT = "Quit Portal? Anything playing or casting stops, and Kodi closes if Portal started it.";
+export const LAN_TEXT = "Portal restarts to change who can reach it. Anything playing will stop. Continue?";
+const QUIT_TEXT =
+  "Quit Portal? This stops the Portal server. Anything playing or casting will stop, and Kodi will close if Portal started it.";
 
 let brand: HTMLAnchorElement | null = null;
 let menu: HTMLElement | null = null;
@@ -61,7 +63,8 @@ function item(act: string, label: string, enabled = true, checked?: boolean): st
   const role = checked === undefined ? "menuitem" : "menuitemcheckbox";
   const state = checked === undefined ? "" : ` aria-checked="${checked ? "true" : "false"}"`;
   const off = enabled && !busy ? "" : " disabled";
-  const mark = checked === undefined ? "" : `<span class="app-check" aria-hidden="true">${checked ? "✓" : ""}</span>`;
+  // Every item keeps the tick's column, so all labels line up as in the tray menu.
+  const mark = `<span class="app-check" aria-hidden="true">${checked ? "✓" : ""}</span>`;
   return `<button type="button" class="app-item" role="${role}"${state} data-app="${act}"${off}>${mark}<span>${esc(label)}</span></button>`;
 }
 
@@ -88,7 +91,7 @@ function paint(): void {
   parts.push(`<p class="app-head">Server</p>`);
   parts.push(line(`Server: running on port ${port}`));
   if (status) parts.push(line(`Kodi engine: ${status.state}${status.version ? ` (${status.version})` : ""}`));
-  if (update) parts.push(line(`Version ${update.current}`));
+  if (update) parts.push(line(`Portal version ${update.current}`));
   if (app?.encoder) parts.push(line(encoderLine(app.encoder)));
   parts.push(`<hr />`);
   parts.push(item("lan", "Allow TVs on this network", cast !== null && tray, cast?.lan === true));
@@ -98,7 +101,7 @@ function paint(): void {
   parts.push(item("restart", "Restart Portal server", tray));
   parts.push(item("check", "Check for updates", update !== null));
   parts.push(`<hr />`);
-  parts.push(item("server", "Open server page"));
+  parts.push(item("server", "Open settings"));
   parts.push(item("logs", "Open log folder"));
   parts.push(`<hr />`);
   parts.push(item("autostart", "Start with Windows", tray && typeof app?.autostart === "boolean", app?.autostart === true));
@@ -131,6 +134,12 @@ async function open(): Promise<void> {
   menu.querySelector<HTMLButtonElement>(".app-item:not(:disabled)")?.focus();
   await load();
   if (isOpen()) paint();
+}
+
+/** Restarts the Portal server, then loads the page fresh once it answers again. */
+export async function restartPortal(): Promise<void> {
+  await api.appRestart();
+  await reloadWhenBack();
 }
 
 /** Waits for the server to go away and answer again, then loads the page fresh. */
@@ -179,19 +188,23 @@ async function run(act: string): Promise<void> {
       );
     } else if (act === "lan") {
       if (!confirm(LAN_TEXT)) return;
-      loaded.cast = await api.setCastLan(loaded.cast?.lan !== true);
+      const next = await api.setCastLan(loaded.cast?.lan !== true);
+      loaded.cast = next;
+      // An older Portal does not say; it always needed the restart.
+      if (next.restart_needed === false) {
+        say(next.lan ? "TVs on this network can reach Portal." : "Only this PC can reach Portal.");
+        return;
+      }
       say("Restarting Portal…");
-      await api.appRestart();
-      await reloadWhenBack();
+      await restartPortal();
     } else if (act === "restart") {
       if (!confirm(RESTART_TEXT)) return;
       say("Restarting Portal…");
-      await api.appRestart();
-      await reloadWhenBack();
+      await restartPortal();
     } else if (act === "quit") {
       if (!confirm(QUIT_TEXT)) return;
       await api.appQuit();
-      say("Portal has quit. Start it again from its shortcut.");
+      say("Portal has quit. Open it again from the Start menu or desktop.");
     }
   } catch (err) {
     say(detail(err));

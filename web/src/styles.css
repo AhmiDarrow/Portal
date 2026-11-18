@@ -1,6 +1,8 @@
-/* Remedy Sans for text and Ahmi Pixel for headings, both under the SIL Open
-   Font License (fonts/*.LICENSE.txt). They draw basic Latin; other characters
-   come from the fonts named after them. */
+/* Remedy Sans for text and Ahmi Pixel for headings by default; Settings can
+   also set the page in Remedy Sans UI or AhmiPrint (fonts.ts). All four are
+   under the SIL Open Font License (fonts/*.LICENSE.txt) and draw Latin,
+   Greek and Cyrillic; other characters come from the fonts named after them.
+   A browser downloads only the faces in use. */
 @font-face {
   font-family: "Remedy Sans";
   src: url("./fonts/RemedySans-Regular.woff2") format("woff2");
@@ -14,6 +16,36 @@
   font-display: swap;
 }
 @font-face {
+  font-family: "Remedy Sans UI";
+  src: url("./fonts/RemedySansUI-Light.woff2") format("woff2");
+  font-weight: 300;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Remedy Sans UI";
+  src: url("./fonts/RemedySansUI-Semilight.woff2") format("woff2");
+  font-weight: 350;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Remedy Sans UI";
+  src: url("./fonts/RemedySansUI-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Remedy Sans UI";
+  src: url("./fonts/RemedySansUI-Semibold.woff2") format("woff2");
+  font-weight: 600;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Remedy Sans UI";
+  src: url("./fonts/RemedySansUI-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
   font-family: "Ahmi Pixel";
   src: url("./fonts/AhmiPixel-Regular.woff2") format("woff2");
   font-weight: 400;
@@ -22,6 +54,18 @@
 @font-face {
   font-family: "Ahmi Pixel";
   src: url("./fonts/AhmiPixel-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: "AhmiPrint";
+  src: url("./fonts/AhmiPrint-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "AhmiPrint";
+  src: url("./fonts/AhmiPrint-Bold.woff2") format("woff2");
   font-weight: 700;
   font-display: swap;
 }
@@ -507,7 +551,24 @@ main > p { max-width: 68ch; }
 .addon .row-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; margin-left: auto; }
 .addon .art { width: 64px; aspect-ratio: 1; border-radius: 8px; }
 .addon.current { border-color: var(--gold); }
+.in-use {
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.45rem;
+  border: 1px solid var(--gold);
+  border-radius: 99px;
+  color: var(--gold);
+  font-size: 0.8rem;
+  vertical-align: middle;
+}
+/* Rows inside a Source card sit on the card's well, one step down. */
+.source-card .addon { background: var(--well); }
+.addon .row-actions button.primary { border-color: var(--gold); color: var(--gold); }
+.source-card .search { margin: 0.4rem 0 0.6rem; }
+.source-card > p { margin: 0.35rem 0; }
+.source-card #repo-videos { margin-top: 0.8rem; padding-top: 0.6rem; border-top: 1px solid var(--line); }
 .addon .grow, .history-item .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+/* A name keeps room to read; the buttons move under it on a narrow screen. */
+.addon .grow { flex: 1 1 11rem; }
 
 .history-item { display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap; }
 .history-item .art { width: 48px; aspect-ratio: 1; border-radius: 8px; }
@@ -522,7 +583,8 @@ main > p { max-width: 68ch; }
   top: calc(100% + 0.6rem);
   left: 0;
   z-index: 6;
-  width: 17.5rem;
+  width: 20rem;
+  max-width: calc(100vw - 2rem);
   max-height: min(80vh, 34rem);
   overflow: auto;
   padding: 0.4rem;
@@ -538,25 +600,26 @@ main > p { max-width: 68ch; }
 .app-item {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.4rem;
   width: 100%;
+  padding-left: 0.45rem;
   text-align: left;
   background: transparent;
   border-color: transparent;
 }
 .app-item:focus-visible { outline-offset: -2px; }
-.app-item[role="menuitemcheckbox"] { padding-left: 0.5rem; }
+/* Text lines up with the items' labels, past the tick column. */
 .app-check { flex: 0 0 1rem; color: var(--gold); text-align: center; }
 .app-head {
-  margin: 0.45rem 0.6rem 0.15rem;
+  margin: 0.45rem 0.6rem 0.15rem 1.9rem;
   color: var(--muted);
   font-size: 0.78rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-.app-status { margin: 0.1rem 0.6rem; color: var(--muted); font-size: 0.9rem; }
+.app-status { margin: 0.1rem 0.6rem 0.1rem 1.9rem; color: var(--muted); font-size: 0.9rem; }
 .app-note {
-  margin: 0.3rem 0.6rem 0.2rem;
+  margin: 0.3rem 0.6rem 0.2rem 1.9rem;
   min-height: 1.2rem;
   color: var(--muted);
   font-size: 0.9rem;
@@ -618,19 +681,100 @@ main > p { max-width: 68ch; }
   color: var(--gold);
   background: color-mix(in srgb, var(--gold) 14%, var(--bg));
 }
-.setting label { display: block; color: var(--muted); margin-bottom: 0.3rem; }
-.setting .note {
-  min-height: 1.2rem;
-  color: var(--muted);
-  font-size: 0.9rem;
-  white-space: pre-line;
-  overflow-wrap: anywhere;
+/* An add-on's fields are rows of one card, as on Settings and Source: the
+   name on the left, the control on the right, a status line under both. */
+.setting-list { padding-top: 0.2rem; padding-bottom: 0.2rem; }
+.setting-list .setting,
+.setting-list .setting:hover {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 18rem);
+  align-items: center;
+  gap: 0.3rem 1rem;
+  margin: 0;
+  padding: 0.6rem 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
 }
-.setting-value {
-  margin-left: 0.6rem;
-  color: var(--muted);
-  font-size: 0.9rem;
-  overflow-wrap: anywhere;
+.setting-list .setting + .setting { border-top: 1px solid color-mix(in srgb, var(--line) 75%, transparent); }
+.setting-list .setting.is-compact { grid-template-columns: minmax(0, 1fr) auto; }
+.setting-name { min-width: 0; overflow-wrap: anywhere; }
+.setting-control { display: flex; align-items: center; justify-content: flex-end; gap: 0.6rem; min-width: 0; }
+.setting-control select,
+.setting-control input:not(.toggle) { width: 100%; min-width: 0; }
+.setting-control button, .setting-control .action-link { flex: none; }
+.setting.is-off .setting-name { color: var(--muted); }
+.setting-list .setting-head {
+  margin: 1rem 0 0.1rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--line);
+  font-size: 16px;
+  color: var(--gold);
+}
+.setting-list .setting-head:first-child { margin-top: 0.3rem; padding-top: 0; border-top: 0; }
+.setting .note { grid-column: 1 / -1; color: var(--muted); font-size: 0.9rem; white-space: pre-line; overflow-wrap: anywhere; }
+/* An empty note takes no room, so every row has the same padding. */
+.setting .note:empty { display: none; }
+.setting-value { min-width: 0; color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; text-align: right; }
+@media (max-width: 720px) {
+  .setting-cats { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 0.2rem; }
+  .setting-cats button { flex: none; }
+  .setting-list .setting:not(.is-compact),
+  .setting-list .setting:not(.is-compact):hover { grid-template-columns: minmax(0, 1fr); }
+  .setting-list .setting:not(.is-compact) .setting-control { justify-content: flex-start; }
+  .setting-value { text-align: left; }
+}
+
+/* One switch look for every On/Off setting: an add-on's checkboxes and
+   Settings' switch buttons. The words On and Off stay for screen readers. */
+input.toggle,
+.server-card button[role="switch"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex: none;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  height: 1.5rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--well);
+  color: transparent;
+  font-size: 0;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+input.toggle::before,
+.server-card button[role="switch"]::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0.2rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  background: var(--muted);
+  transform: translateY(-50%);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+input.toggle:checked,
+.server-card button[role="switch"][aria-checked="true"] {
+  border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 28%, var(--well));
+}
+input.toggle:checked::before,
+.server-card button[role="switch"][aria-checked="true"]::before {
+  background: var(--gold);
+  transform: translate(1.2rem, -50%);
+}
+input.toggle:disabled,
+.server-card button[role="switch"]:disabled { opacity: 0.45; cursor: default; }
+@media (prefers-reduced-motion: reduce) {
+  input.toggle, input.toggle::before,
+  .server-card button[role="switch"], .server-card button[role="switch"]::before { transition: none; }
 }
 .check { display: flex; gap: 0.45rem; align-items: center; }
 
@@ -2008,19 +2152,41 @@ body.cast-mode > #prompt {
 .dock-save .icon-btn.is-on,
 .dock-save .icon-btn.is-on:hover:not(:disabled) { color: var(--gold); }
 
-/* Server page: media info settings. */
-#server-media [role="switch"] { min-width: 3.4rem; }
-#server-media [role="switch"][aria-checked="true"] { color: var(--gold); border-color: var(--gold); }
-#server-media > .row { justify-content: space-between; }
+/* Server page: every On/Off switch looks and sits the same way. */
+.server-card > .row:has(> [role="switch"]) { justify-content: space-between; flex-wrap: nowrap; }
+.server-card > .row:has(> [role="switch"]) > span { min-width: 0; }
+.server-card > .cast-restart { justify-content: space-between; }
+.server-card > .row > button { flex: none; }
+.server-card > .fact { justify-content: space-between; }
+/* A drop-down sits at the right of its label, like a switch. */
+.server-card > .select-row { justify-content: space-between; flex-wrap: nowrap; }
+.server-card > .select-row label { min-width: 0; }
+.server-card > .select-row select { flex: 0 1 15rem; min-width: 0; max-width: 60%; }
+.server-card > .row + p.muted, .server-card > h2 + p.muted { margin: 0.35rem 0 0.5rem; font-size: 0.92rem; }
+.font-sample {
+  margin: 0.6rem 0;
+  padding: 0.7rem 0.85rem;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--well);
+}
+.font-sample p { margin: 0; overflow-wrap: anywhere; }
+.font-sample .font-sample-head { font-family: var(--display); font-size: 24px; line-height: 1.3; margin-bottom: 0.25rem; }
+/* Settings' section buttons, to jump down a long page. */
+.jump-bar { margin: 0 0 0.6rem; }
+.jump-bar button { padding: 0.28rem 0.7rem; font-size: 0.92rem; }
+@media (max-width: 720px) {
+  .jump-bar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .jump-bar button { flex: none; }
+}
+#server-engine > .row:last-child,
+.update-card > .row:last-child { border-top: 0; padding-top: 0.6rem; }
 .media-key { margin-top: 0.9rem; }
 .media-key label { display: block; color: var(--muted); margin-bottom: 0.1rem; }
 .media-key .search { margin: 0.3rem 0 0.35rem; flex-wrap: wrap; }
 .media-key .search input { flex: 1 1 14rem; width: auto; min-width: 0; }
 .media-key p { margin: 0; font-size: 0.92rem; }
 .key-saved { color: var(--gold); }
-#server-subs [role="switch"] { min-width: 3.4rem; }
-#server-subs > .row { justify-content: space-between; }
-#server-subs [role="switch"][aria-checked="true"] { color: var(--gold); border-color: var(--gold); }
 #server-subs .subs-langs { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; margin: 0.6rem 0 0.2rem; }
 #server-subs .subs-langs > span { color: var(--muted); flex-basis: 100%; }
 .lang-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0; padding: 0; list-style: none; }
