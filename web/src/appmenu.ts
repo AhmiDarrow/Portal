@@ -101,7 +101,7 @@ function paint(): void {
   parts.push(item("restart", "Restart Portal server", tray));
   parts.push(item("check", "Check for updates", update !== null));
   parts.push(`<hr />`);
-  parts.push(item("server", "Open server page"));
+  parts.push(item("server", "Open settings"));
   parts.push(item("logs", "Open log folder"));
   parts.push(`<hr />`);
   parts.push(item("autostart", "Start with Windows", tray && typeof app?.autostart === "boolean", app?.autostart === true));

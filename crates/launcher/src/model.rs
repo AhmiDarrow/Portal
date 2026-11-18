@@ -468,7 +468,7 @@ impl Model {
         items.push(Entry::Separator);
         items.push(Entry::Item(Item::new(
             Cmd::OpenServerPage,
-            "Open server page",
+            "Open settings",
             self.service != Service::PortTaken,
         )));
         items.push(Entry::Item(Item::new(

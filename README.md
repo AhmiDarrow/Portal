@@ -153,6 +153,6 @@ This writes `target\installer\Portal-Setup-<version>.exe` and its checksum, `Por
 
 [MIT](LICENSE)
 
-The dashboard is set in Remedy Sans and Ahmi Pixel, both under the SIL Open Font License 1.1 (`web/src/fonts`).
+The dashboard is set in Remedy Sans and Ahmi Pixel by default; Settings also offers Remedy Sans UI and AhmiPrint. All four are under the SIL Open Font License 1.1 (`web/src/fonts`).
 
 Portal is an independent project. It is not affiliated with or endorsed by Kodi or the XBMC Foundation, and it ships no add-ons and no media: what you watch through an add-on is between you and that add-on. Kodi is a registered trademark of the XBMC Foundation. Portal can use the TMDB API but is not endorsed or certified by TMDB.
