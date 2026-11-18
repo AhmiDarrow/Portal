@@ -161,12 +161,33 @@ function remember(id: ThemeId): void {
   }
 }
 
+let current: ThemeId = "portal";
+/** The header's menu repaints its ticks when Settings changes the theme. */
+let onChange: (() => void) | null = null;
+
+/** The theme this browser uses now. */
+export function currentTheme(): ThemeId {
+  return current;
+}
+
+/** Changes and remembers the theme, as the header's Theme menu does. */
+export function setTheme(id: ThemeId): void {
+  if (!MENU_IDS.has(id)) return;
+  current = id;
+  remember(id);
+  paint(id);
+  onChange?.();
+}
+
 export function mountThemes(): void {
+  current = storedChoice();
   const button = document.querySelector("#theme-button");
   const menu = document.querySelector("#theme-menu");
-  if (!(button instanceof HTMLButtonElement) || !(menu instanceof HTMLElement)) return;
+  if (!(button instanceof HTMLButtonElement) || !(menu instanceof HTMLElement)) {
+    paint(current);
+    return;
+  }
 
-  let current = storedChoice();
   let focusIndex = Math.max(0, themeMenu.findIndex((item) => item.id === current));
 
   const choiceName = (id: ThemeId) => themeMenu.find((item) => item.id === id)?.name ?? "Portal";
@@ -183,10 +204,7 @@ export function mountThemes(): void {
   };
 
   const choose = (id: ThemeId) => {
-    current = id;
-    remember(id);
-    paint(id);
-    mark();
+    setTheme(id);
     close();
     button.focus();
   };
@@ -217,6 +235,7 @@ export function mountThemes(): void {
 
   paint(current);
   mark();
+  onChange = mark;
 
   button.addEventListener("click", () => {
     if (menu.hidden) open();
