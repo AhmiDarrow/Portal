@@ -99,7 +99,7 @@ pub fn pick_source(
             // episode, closest height first. Rows that do not say come next.
             // Copies too tall are last, smallest first, and a season file does not
             // jump the quality cap.
-            let saved = u8::from(!pack_fits(row, cap, preferred));
+            let saved = pack_rank(row, cap, preferred);
             let (fit, distance) = match row_height(row) {
                 Some(height) if height <= cap => (0u8, cap - height),
                 None => (1, 0),
@@ -124,17 +124,28 @@ pub fn pack_identity(row: &str) -> Option<String> {
     Some(key)
 }
 
-/// True when `row` is the remembered season file and is not taller than `cap`.
-/// A row that does not name a height still counts; a 4K file does not stick
-/// for a 1080p play.
-fn pack_fits(row: &str, cap: u32, preferred: Option<&str>) -> bool {
-    let Some(preferred) = preferred else {
-        return false;
+/// How well `row` matches the remembered season file: 0 when it is that
+/// file, 1 when the row names that file's whole release among other words,
+/// 2 when it is not that file. The second keeps the pack when an add-on
+/// changes how it lays out a row, as an update can, adding a size or a tag
+/// next to the name. A row taller than `cap` never matches; one that does
+/// not name a height still can, and a 4K file does not stick for a 1080p play.
+fn pack_rank(row: &str, cap: u32, preferred: Option<&str>) -> u8 {
+    let Some(preferred) = preferred.filter(|id| !id.is_empty()) else {
+        return 2;
     };
-    match row_height(row) {
-        Some(height) if height > cap => false,
-        _ => pack_identity(row).as_deref() == Some(preferred),
+    if matches!(row_height(row), Some(height) if height > cap) {
+        return 2;
     }
+    if pack_identity(row).as_deref() == Some(preferred) {
+        return 0;
+    }
+    // Whole words only, so a remembered name never matches inside a longer word.
+    let words = format!(".{}.", dotted(row));
+    if words.contains(&format!(".{preferred}.")) {
+        return 1;
+    }
+    2
 }
 
 /// The title on the row: the name before the dash, or the longest
