@@ -4,7 +4,9 @@
 //! shows the full length and can move anywhere in it. The pieces are made
 //! when the TV asks for them: an encoder starts at the piece asked for and
 //! runs on from there, and a jump to a part not yet made starts it again at
-//! that part.
+//! that part. A lone ask far from the encoder, such as the TV reading the
+//! first piece while it resumes further on, gets a second encoder beside
+//! the first, which stays: the TV takes up whichever one it reads on from.
 //!
 //! Every run keeps its own clock, starting at zero, so each run's pieces and
 //! start file come out the same wherever it began. The title's own time is
@@ -25,8 +27,12 @@ const CAST_MAXRATE: u64 = 8_000_000;
 const NEAR_PIECES: u32 = 5;
 const PIECE_WAIT: Duration = Duration::from_secs(45);
 const PIECE_POLL: Duration = Duration::from_millis(100);
+/// A piece that takes this long to be ready is noted in the log.
+const PIECE_SLOW: Duration = Duration::from_secs(1);
 /// A last piece shorter than this is left out of the playlist.
 const SLIVER: f64 = 0.5;
+/// How much of ffmpeg's error output goes in the log, in characters.
+const ERROR_TAIL: usize = 600;
 
 pub(super) struct CastStream {
     session: String,
@@ -35,7 +41,11 @@ pub(super) struct CastStream {
     total: u32,
     /// The first piece of every encoder run so far.
     runs: Vec<u32>,
+    /// The encoder the TV is reading from.
     run: Option<CastRun>,
+    /// An encoder started for a piece far from `run`, kept apart until the
+    /// TV reads on from it.
+    side: Option<CastRun>,
     /// Each track's ticks a second, read from the start file.
     scales: Option<Vec<(u32, u32)>>,
 }
@@ -47,6 +57,22 @@ struct CastRun {
     /// The first piece this run has not written yet.
     next: u32,
     child: Arc<Mutex<Child>>,
+    /// The end of ffmpeg's error output, for the log when the run stops by itself.
+    errors: Arc<Mutex<String>>,
+}
+
+impl CastRun {
+    /// Moves `next` past the pieces now on disk.
+    fn catch_up(&mut self, dir: &Path) {
+        while piece_path(dir, self.start, self.next).is_file() {
+            self.next += 1;
+        }
+    }
+
+    /// Whether the TV reading `index` is reading from this run.
+    fn covers(&self, index: u32) -> bool {
+        self.start <= index && index < self.next + NEAR_PIECES
+    }
 }
 
 impl CastStream {
@@ -57,7 +83,7 @@ impl CastStream {
     /// Ends the encoder and removes the files. Blocks, so call it off the
     /// async threads.
     pub(super) fn close(self) {
-        if let Some(run) = self.run {
+        for run in self.run.into_iter().chain(self.side) {
             end_process(&run.child);
         }
         remove_dir(&self.dir);
@@ -77,7 +103,10 @@ impl CastStream {
 enum Step {
     Have { path: PathBuf, start: u32 },
     Wait,
+    /// A new encoder in place of the current one.
     Start,
+    /// A new encoder beside the current one, which the TV still reads from.
+    Side,
     Gone,
 }
 
@@ -190,15 +219,41 @@ pub(super) fn cast_args(
     args.push(input.to_string());
     args.push("-map".into());
     args.push(stream_map(video, "v"));
+    let piece = f64::from(PIECE_SECONDS);
+    // Where the run ends, in the source's time: at a piece already made, or
+    // at the end of the title the playlist lists.
+    let end = until
+        .filter(|until| *until > start)
+        .map(|until| f64::from(until) * piece)
+        .into_iter()
+        .chain(source.duration.filter(|length| length.is_finite()))
+        .reduce(f64::min);
+    let length = end
+        .map(|end| end - f64::from(start) * piece)
+        .filter(|length| *length > 0.0);
     let plan = cast_plan(video, source.quality);
-    args.extend(video_args_cut(
+    let mut picture = video_args_cut(
         &plan,
         &video.transfer,
         video.interlaced,
         zscale,
         PIECE_SECONDS,
         encoder,
-    ));
+    );
+    // A file whose sound runs on past its picture would stop making pieces
+    // where the picture ends, though the playlist lists them to the end.
+    // Every later piece would then start ffmpeg again for one empty piece.
+    // Holding the last frame and padding the sound, cut at the title's
+    // length, makes every listed piece in the one run.
+    let padded = length.is_some();
+    if padded {
+        if let Some(at) = picture.iter().position(|arg| arg == "-vf") {
+            if let Some(filters) = picture.get_mut(at + 1) {
+                filters.push_str(",tpad=stop_mode=clone:stop=-1");
+            }
+        }
+    }
+    args.extend(picture);
     // Without B-frames the picture starts with the sound, with no edit list
     // for the TV to honour or ignore.
     args.extend(["-bf".into(), "0".into()]);
@@ -216,15 +271,18 @@ pub(super) fn cast_args(
         ]),
         None => args.push("-an".into()),
     }
+    if padded && source.audio.is_some() {
+        args.extend(["-af".into(), "apad".into()]);
+    }
     args.extend([
         "-sn".into(),
         "-dn".into(),
         "-max_muxing_queue_size".into(),
         "2048".into(),
     ]);
-    if let Some(until) = until.filter(|until| *until > start) {
+    if let Some(length) = length {
         args.push("-t".into());
-        args.push((u64::from(until - start) * u64::from(PIECE_SECONDS)).to_string());
+        args.push(format!("{length:.3}"));
     }
     let folder = dir.display().to_string().replace('%', "%%");
     args.extend([
@@ -418,6 +476,7 @@ impl Player {
             total: piece_count(duration),
             runs: Vec::new(),
             run: None,
+            side: None,
             scales: None,
         });
         Some(session)
@@ -466,13 +525,24 @@ impl Player {
     /// Ends the encoder of the job's whole-title stream: no TV plays it
     /// now. The pieces stay, and the next request for one starts it again.
     pub fn cast_rest(&self, job_id: &str) {
-        let run = self
+        let runs: Vec<CastRun> = self
             .lock_jobs()
             .get_mut(job_id)
             .and_then(|slot| slot.cast.as_mut())
-            .and_then(|cast| cast.run.take());
-        if let Some(run) = run {
-            tokio::task::spawn_blocking(move || end_process(&run.child));
+            .map(|cast| {
+                cast.run
+                    .take()
+                    .into_iter()
+                    .chain(cast.side.take())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !runs.is_empty() {
+            tokio::task::spawn_blocking(move || {
+                for run in runs {
+                    end_process(&run.child);
+                }
+            });
         }
     }
 
@@ -499,7 +569,18 @@ impl Player {
             return self.cast_init(session).await;
         }
         let index = piece_index(name).ok_or(EngineError::NotFound)?;
+        let asked = Instant::now();
         let (path, start) = self.cast_piece_on_disk(session, index).await?;
+        let waited = asked.elapsed();
+        if waited >= PIECE_SLOW {
+            // The TV caught up with the encoder, or a jump started one.
+            tracing::info!(
+                session = %session,
+                piece = index,
+                seconds = format!("{:.1}", waited.as_secs_f64()),
+                "The TV waited for a piece"
+            );
+        }
         let scales = self.cast_scales(session, start).await?;
         let seconds = u64::from(start) * u64::from(PIECE_SECONDS);
         let piece = tokio::fs::read(&path)
@@ -588,29 +669,105 @@ impl Player {
         Ok(read(cast))
     }
 
-    fn cast_step(&self, session: &str, index: u32) -> Result<Step, EngineError> {
+    /// What a request for piece `index` does, and the runs it no longer
+    /// needs, which the caller ends.
+    fn cast_step(&self, session: &str, index: u32) -> Result<(Step, Vec<CastRun>), EngineError> {
         self.with_cast(session, |cast| {
             if index >= cast.total {
-                return Step::Gone;
-            }
-            if let Some(start) = cast.made_by(index) {
-                return Step::Have {
-                    path: piece_path(&cast.dir, start, index),
-                    start,
-                };
+                return (Step::Gone, Vec::new());
             }
             let dir = cast.dir.clone();
-            if let Some(run) = cast.run.as_mut() {
-                while piece_path(&dir, run.start, run.next).is_file() {
-                    run.next += 1;
-                }
-                let near = run.start <= index && index < run.next + NEAR_PIECES;
-                if near && !child_exited(&run.child) {
-                    return Step::Wait;
-                }
+            for run in cast.run.iter_mut().chain(cast.side.iter_mut()) {
+                run.catch_up(&dir);
             }
-            Step::Start
+            let mut done = Vec::new();
+            let side_followed = cast
+                .side
+                .as_ref()
+                .is_some_and(|side| side.covers(index) && index > side.start);
+            if side_followed {
+                // The TV reads on from the side run: it is the one in use now.
+                done.extend(cast.run.take());
+                cast.run = cast.side.take();
+            } else if cast.run.as_ref().is_some_and(|run| run.covers(index))
+                && cast
+                    .side
+                    .as_ref()
+                    .is_some_and(|side| side.next > side.start)
+            {
+                // The TV took its lone piece and went back to the main run.
+                done.extend(cast.side.take());
+            }
+            if let Some(start) = cast.made_by(index) {
+                let path = piece_path(&cast.dir, start, index);
+                return (Step::Have { path, start }, done);
+            }
+            let waits = cast
+                .run
+                .iter()
+                .chain(cast.side.iter())
+                .any(|run| run.covers(index) && !child_exited(&run.child));
+            if waits {
+                return (Step::Wait, done);
+            }
+            // A main run still encoding stays for the TV, which is likely to
+            // come back to it after this one piece.
+            let busy = cast
+                .run
+                .as_ref()
+                .is_some_and(|run| !child_exited(&run.child));
+            (if busy { Step::Side } else { Step::Start }, done)
         })
+    }
+
+    /// Ends runs off the async threads, noting any that stopped by themselves.
+    fn retire(&self, job_id: &str, runs: Vec<CastRun>) {
+        if runs.is_empty() {
+            return;
+        }
+        for run in &runs {
+            self.note_run_end(job_id, run);
+        }
+        tokio::task::spawn_blocking(move || {
+            for run in runs {
+                end_process(&run.child);
+            }
+        });
+    }
+
+    /// A run that stopped before Portal ended it: logs why, and marks a
+    /// graphics card that could not make even one piece.
+    fn note_run_end(&self, job_id: &str, run: &CastRun) {
+        let status = lock_child(&run.child).try_wait().ok().flatten();
+        let Some(status) = status else {
+            return;
+        };
+        if status.success() {
+            tracing::info!(job = %job_id, from = run.start, to = run.next, "The TV encode ran to its end");
+            return;
+        }
+        if run.hardware && run.next == run.start {
+            self.hardware_failed();
+        }
+        let errors = run
+            .errors
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clone();
+        let errors = errors.trim();
+        let tail = errors
+            .char_indices()
+            .rev()
+            .nth(ERROR_TAIL)
+            .map_or(errors, |(at, _)| &errors[at..]);
+        tracing::warn!(
+            job = %job_id,
+            from = run.start,
+            to = run.next,
+            code = status.code().unwrap_or(-1),
+            errors = tail,
+            "The TV encode stopped early"
+        );
     }
 
     /// The piece's file and the run that made it, once it is on disk.
@@ -619,18 +776,32 @@ impl Player {
         session: &str,
         index: u32,
     ) -> Result<(PathBuf, u32), EngineError> {
+        let job_id = self
+            .lock_sessions()
+            .get(session)
+            .cloned()
+            .ok_or(EngineError::NotFound)?;
         let deadline = Instant::now() + PIECE_WAIT;
         let mut starts = 0;
         loop {
-            match self.cast_step(session, index)? {
+            let (step, done) = self.cast_step(session, index)?;
+            self.retire(&job_id, done);
+            match step {
                 Step::Have { path, start } => return Ok((path, start)),
                 Step::Gone => return Err(EngineError::NotFound),
                 Step::Wait => {}
-                Step::Start => {
+                Step::Start | Step::Side => {
                     // One request at a time decides, so two never start an
                     // encoder each.
                     let _gate = self.inner.cast_gate.lock().await;
-                    if matches!(self.cast_step(session, index)?, Step::Start) {
+                    let (step, done) = self.cast_step(session, index)?;
+                    self.retire(&job_id, done);
+                    let side = match step {
+                        Step::Start => Some(false),
+                        Step::Side => Some(true),
+                        _ => None,
+                    };
+                    if let Some(side) = side {
                         if starts >= 2 {
                             return Err(EngineError::Message(
                                 "Portal could not prepare that part of the video for the TV."
@@ -638,7 +809,7 @@ impl Player {
                             ));
                         }
                         starts += 1;
-                        self.start_cast_run(session, index).await?;
+                        self.start_cast_run(session, index, side).await?;
                     }
                 }
             }
@@ -649,7 +820,14 @@ impl Player {
         }
     }
 
-    async fn start_cast_run(&self, session: &str, start: u32) -> Result<(), EngineError> {
+    /// Starts an encoder at piece `start`: in place of the current runs, or,
+    /// for a `side` run, beside the main one, which keeps going.
+    async fn start_cast_run(
+        &self,
+        session: &str,
+        start: u32,
+        side: bool,
+    ) -> Result<(), EngineError> {
         let job_id = self
             .lock_sessions()
             .get(session)
@@ -667,19 +845,17 @@ impl Player {
                 .as_mut()
                 .filter(|cast| cast.session == session)
                 .ok_or(EngineError::NotFound)?;
-            (
-                source,
-                cast.dir.clone(),
-                cast.total,
-                cast.runs.clone(),
-                cast.run.take(),
-            )
-        };
-        // A card whose last run ended without one piece cannot encode this.
-        if let Some(old) = &old {
-            if old.hardware && old.next == old.start && child_exited(&old.child) {
-                self.hardware_failed();
+            let mut old: Vec<CastRun> = cast.side.take().into_iter().collect();
+            if !side {
+                old.extend(cast.run.take());
             }
+            for run in &mut old {
+                run.catch_up(&cast.dir);
+            }
+            (source, cast.dir.clone(), cast.total, cast.runs.clone(), old)
+        };
+        for run in &old {
+            self.note_run_end(&job_id, run);
         }
         let encoder = self.encoder().await;
         let hdr = source
@@ -689,9 +865,9 @@ impl Player {
         let zscale = hdr && self.zscale_available().await;
         let ffmpeg = self.inner.ffmpeg.clone();
         let spawn_dir = dir.clone();
-        let child = tokio::task::spawn_blocking(move || {
-            if let Some(old) = old {
-                end_process(&old.child);
+        let (child, errors) = tokio::task::spawn_blocking(move || {
+            for run in old {
+                end_process(&run.child);
             }
             // The run stops where an earlier one already made the pieces.
             let until = (start + 1..total).find(|index| {
@@ -702,31 +878,43 @@ impl Player {
             // ffmpeg writes the start file where it runs, not beside the pieces.
             let mut child = spawn_ffmpeg_in(&ffmpeg, &args, Some(&spawn_dir))
                 .map_err(|_| EngineError::Message("Transcoding failed to start".into()))?;
-            // Nothing reads the errors, and a full pipe would stop the encode.
-            drop(drain_stderr(&mut child));
-            Ok::<Child, EngineError>(child)
+            // Kept for the log; a full pipe would stop the encode.
+            let errors = drain_stderr(&mut child);
+            Ok::<_, EngineError>((child, errors))
         })
         .await
         .map_err(|_| EngineError::Message("Transcoding failed to start".into()))??;
         let child = Arc::new(Mutex::new(child));
-        tracing::info!(job = %job_id, piece = start, encoder = encoder.name(), "Encoding for the TV");
+        tracing::info!(job = %job_id, piece = start, side, encoder = encoder.name(), "Encoding for the TV");
         let kept = self.with_cast(session, |cast| {
             if !cast.runs.contains(&start) {
                 cast.runs.push(start);
             }
-            cast.run = Some(CastRun {
+            let run = CastRun {
                 start,
                 hardware: encoder.is_hardware(),
                 next: start,
                 child: child.clone(),
-            });
+                errors,
+            };
+            if side {
+                cast.side.replace(run)
+            } else {
+                cast.run.replace(run)
+            }
         });
-        if kept.is_err() {
-            // The stream closed while the encoder started.
-            let _ = tokio::task::spawn_blocking(move || end_process(&child)).await;
-            return Err(EngineError::NotFound);
+        match kept {
+            // A run already in the slot is ended rather than lost.
+            Ok(replaced) => {
+                self.retire(&job_id, replaced.into_iter().collect());
+                Ok(())
+            }
+            Err(err) => {
+                // The stream closed while the encoder started.
+                let _ = tokio::task::spawn_blocking(move || end_process(&child)).await;
+                Err(err)
+            }
         }
-        Ok(())
     }
 }
 
