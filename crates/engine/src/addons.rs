@@ -111,6 +111,8 @@ impl DirCand {
 struct Import {
     addon: String,
     optional: bool,
+    /// The lowest version the add-on needs; empty when it names none.
+    version: String,
 }
 
 #[derive(Clone)]
@@ -481,6 +483,7 @@ impl Addons {
         accept: Accept,
     ) -> Result<InstallOutcome, EngineError> {
         let disk = self.disk_only();
+        self.forget_updates();
         tokio::task::spawn_blocking(move || disk.commit(stage_zip(&bytes, accept)?))
             .await
             .map_err(|_| EngineError::Message("Could not install this add-on.".into()))?
@@ -601,9 +604,12 @@ impl Addons {
             }
         }
         let mut found: Vec<AddonUpdate> = Vec::new();
-        for card in self.installed_repos()?.items {
+        let repos = self.installed_repos()?.items;
+        let mut unread = 0;
+        for card in &repos {
             // A repository that cannot be read now is skipped; the others still count.
             let Ok((_, packages)) = self.index_for(&card.id).await else {
+                unread += 1;
                 continue;
             };
             for package in packages {
@@ -637,9 +643,23 @@ impl Addons {
                 .cmp(&right.name.to_ascii_lowercase())
                 .then(left.id.cmp(&right.id))
         });
-        *self.updates.lock().unwrap_or_else(|err| err.into_inner()) =
-            Some((Instant::now(), found.clone()));
+        if unread > 0 && unread == repos.len() {
+            return Err(EngineError::Message(
+                "The repositories could not be read, so updates were not checked.".into(),
+            ));
+        }
+        // A list missing a repository is shown, but read again next time.
+        if unread == 0 {
+            *self.updates.lock().unwrap_or_else(|err| err.into_inner()) =
+                Some((Instant::now(), found.clone()));
+        }
         Ok(found)
+    }
+
+    /// Drops the kept list of updates: an install, removal or update has
+    /// changed what is on disk.
+    fn forget_updates(&self) {
+        *self.updates.lock().unwrap_or_else(|err| err.into_inner()) = None;
     }
 
     /// Replaces an add-on under the Kodi profile with the newest version its
@@ -653,18 +673,26 @@ impl Addons {
                 "Only add-ons added to this PC can be updated here.".into(),
             ));
         }
-        let wanted = self
-            .updates(true)
-            .await?
+        // The kept list names the repository; only that one is read again.
+        let listed = self.updates(false).await?;
+        let mut wanted = listed
             .into_iter()
             .find(|item| item.id == addon_id)
             .ok_or_else(|| EngineError::Message("This add-on is up to date.".into()))?;
         let (_, mut packages) = self.index_for(&wanted.repo).await?;
-        let others = |id: &str| id != addon_id && self.on_disk(id);
-        if plan_deps(&packages, &addon_id, &others).is_err() {
+        let have = self.profile_version(&addon_id).unwrap_or_default();
+        let newest = packages
+            .iter()
+            .find(|package| package.id == addon_id)
+            .filter(|package| version_cmp(&package.version, &have) == Ordering::Greater)
+            .ok_or_else(|| EngineError::Message("This add-on is up to date.".into()))?;
+        wanted.available = newest.version.clone();
+        if plan_deps(&packages, &addon_id, &|id| self.current_for(&packages, &addon_id, id)).is_err() {
             merge_packages(&mut packages, self.dependency_packages(&wanted.repo).await?);
         }
-        let order = plan_deps(&packages, &addon_id, &others)?;
+        let order = plan_deps(&packages, &addon_id, &|id| {
+            self.current_for(&packages, &addon_id, id)
+        })?;
         for id in order {
             let Some(package) = packages.iter().find(|package| package.id == id) else {
                 self.drop_cache();
@@ -672,7 +700,9 @@ impl Addons {
                     "A required add-on is not in this repository.".into(),
                 ));
             };
-            let done = if id == addon_id {
+            // The add-on itself, or a module it needs a newer copy of, is
+            // swapped in place; anything missing is installed.
+            let done = if self.on_disk(&id) {
                 self.replace_package(package).await
             } else {
                 self.install_package(package).await.map(|_| ())
@@ -683,6 +713,7 @@ impl Addons {
             }
         }
         self.drop_cache();
+        self.forget_updates();
         tracing::info!(
             addon = %addon_id,
             from = %wanted.installed,
@@ -694,6 +725,24 @@ impl Addons {
             name: wanted.name,
             kind: wanted.kind,
             wrote: true,
+        })
+    }
+
+    /// Whether `id` is on this PC in a version every package in `packages`
+    /// that needs it accepts, for an update of `target`. The target itself
+    /// never is. Only a copy under the Kodi profile can be swapped, so one
+    /// that ships with Kodi always counts as current.
+    fn current_for(&self, packages: &[Package], target: &str, id: &str) -> bool {
+        if id == target || !self.on_disk(id) {
+            return false;
+        }
+        let Some(have) = self.profile_version(id) else {
+            return true;
+        };
+        !packages.iter().flat_map(|package| &package.imports).any(|import| {
+            import.addon == id
+                && !import.version.is_empty()
+                && version_cmp(&have, &import.version) == Ordering::Less
         })
     }
 
@@ -724,15 +773,25 @@ impl Addons {
             return Err(EngineError::NotFound);
         }
         let stage = self.fill_stage(staged)?;
-        // Beside the add-on, so the move stays on one drive.
-        let old = dest_root.join(format!("{}.portal-old", staged.id));
-        let _ = fs::remove_dir_all(&old);
-        if fs::rename(&dest, &old).is_err() {
+        // Into Portal's staging folder, where Kodi never looks for add-ons;
+        // beside the add-on only when that folder is on another drive. A
+        // copy left beside it by an update that never finished goes first.
+        let aside = dest_root.join(format!("{}.portal-old", staged.id));
+        let _ = fs::remove_dir_all(&aside);
+        let staged_old = self
+            .staging
+            .join(format!("{}.old.{}", staged.id, std::process::id()));
+        let _ = fs::remove_dir_all(&staged_old);
+        let old = if fs::rename(&dest, &staged_old).is_ok() {
+            staged_old
+        } else if fs::rename(&dest, &aside).is_ok() {
+            aside
+        } else {
             let _ = fs::remove_dir_all(&stage);
             return Err(EngineError::Message(
                 "Kodi is using this add-on. Try again in a moment.".into(),
             ));
-        }
+        };
         let placed = fs::rename(&stage, &dest).is_ok() || copy_tree(&stage, &dest).is_ok();
         let _ = fs::remove_dir_all(&stage);
         if !placed {
@@ -792,6 +851,7 @@ impl Addons {
     /// can be asked again: the staging marker remembers the kind already checked.
     fn remove(&self, raw: &str, expect: DiskKind) -> Result<RemoveOutcome, EngineError> {
         let id = require_addon_id(raw)?;
+        self.forget_updates();
         if reserved_addon_dir(&id) {
             return Err(EngineError::BadRequest("Unknown add-on.".into()));
         }
@@ -2100,6 +2160,7 @@ impl IndexBuild {
         self.imports.push(Import {
             addon: id,
             optional,
+            version: attr_value(event, "version"),
         });
     }
 
