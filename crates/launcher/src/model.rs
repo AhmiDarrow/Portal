@@ -417,7 +417,7 @@ impl Model {
         }
         if let Some(update) = self.update.as_ref().filter(|_| self.running()) {
             items.push(Entry::Item(Item::status(format!(
-                "Version {}",
+                "Portal version {}",
                 update.current
             ))));
         }
@@ -468,7 +468,7 @@ impl Model {
         items.push(Entry::Separator);
         items.push(Entry::Item(Item::new(
             Cmd::OpenServerPage,
-            "Open server page",
+            "Open settings",
             self.service != Service::PortTaken,
         )));
         items.push(Entry::Item(Item::new(
