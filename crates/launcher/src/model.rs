@@ -417,7 +417,7 @@ impl Model {
         }
         if let Some(update) = self.update.as_ref().filter(|_| self.running()) {
             items.push(Entry::Item(Item::status(format!(
-                "Version {}",
+                "Portal version {}",
                 update.current
             ))));
         }

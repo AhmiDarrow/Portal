@@ -47,7 +47,7 @@ import {
   type UpdateInfo,
 } from "./api";
 import { awaitAddonPrompts, mount, play, type PlayTarget } from "./player";
-import { wireAppMenu } from "./appmenu";
+import { LAN_TEXT, restartPortal, wireAppMenu } from "./appmenu";
 import { syncCast } from "./cast";
 import { plainSettingLabel, settingsAddon } from "./settings-link";
 import { mountThemes } from "./themes";
@@ -2254,10 +2254,14 @@ async function renderSettings(token: number, id: string): Promise<void> {
   let open = true;
   showPage(describeSettings(false));
   noteKodi(token, () => open, describeSettings(true));
+  // Opened from a link rather than the Source page: fetch the add-on's name too.
+  const names = loadedAddons.length ? null : api.addons().catch(() => null);
   try {
     const doc = await api.settings(id);
+    const listed = await names;
     open = false;
     if (token !== renderToken) return;
+    if (listed && !loadedAddons.length) loadedAddons = listed.items;
     if (categoryAddon !== doc.addon_id) {
       categoryAddon = doc.addon_id;
       categoryIndex = 0;
@@ -2283,9 +2287,10 @@ function paintSettings(doc: SettingsDoc): void {
     .join("");
   const category = doc.categories[categoryIndex];
   const fields = category ? category.fields.map((field) => fieldHtml(doc.addon_id, field)).join("") : `<p class="muted">No settings in this category.</p>`;
+  const name = plainSettingLabel(loadedAddons.find((addon) => addon.id === doc.addon_id)?.name ?? "");
   main!.innerHTML = `
     <div class="row"><h1>Settings</h1><a href="#/source">Source</a></div>
-    <p class="muted">${esc(doc.addon_id)}</p>
+    <p class="muted">${esc(name || doc.addon_id)}</p>
     <div class="cats">${cats}</div>
     ${fields}
   `;
@@ -2324,7 +2329,7 @@ function fieldHtml(addonId: string, field: SettingsField): string {
       control = `<button type="button" data-setting="${esc(id)}" data-kind="action"${disabled}>${esc(label)}</button><span class="setting-value" data-value-for="${esc(id)}"${hidden}>${esc(shown)}</span>`;
     }
   } else if (field.kind === "secret") {
-    control = `<label for="${fid}">${esc(label)}</label><input id="${fid}" type="password" data-setting="${esc(id)}" data-kind="secret" autocomplete="off" placeholder="Leave blank to keep the saved secret"${disabled} />`;
+    control = `<label for="${fid}">${esc(label)}</label><input id="${fid}" type="password" data-setting="${esc(id)}" data-kind="secret" autocomplete="off" placeholder="Leave blank to keep it"${disabled} />`;
   } else if (field.kind === "number") {
     control = `<label for="${fid}">${esc(label)}</label><input id="${fid}" type="number" data-setting="${esc(id)}" data-kind="number" value="${esc(field.value)}"${disabled} />`;
   } else {
@@ -2386,7 +2391,6 @@ function wireSettings(doc: SettingsDoc): void {
   });
 }
 
-/** Sets a field's value in the loaded settings (only over `from`, when given); answers the value it had. */
 /**
  * An action is the add-on changing its own settings, so the form is read
  * again and shows what it stored. A field being typed in is left alone.
@@ -2427,6 +2431,7 @@ function paintSetting(addonId: string, settingId: string, value: string): void {
   });
 }
 
+/** Sets a field's value in the loaded settings (only over `from`, when given); answers the value it had. */
 function noteSetting(doc: SettingsDoc, settingId: string, value: string, from?: string): string | null {
   let before: string | null = null;
   for (const category of doc.categories) {
@@ -2585,11 +2590,13 @@ function castSection(status: Status): string {
   const on = serverCast?.lan === true;
   const href = castPageUrl(serverCast?.url ?? "");
   const link = href
-    ? `<p class="cast-url">Open this on a TV. <a href="${esc(href)}">${esc(href)}</a></p>`
+    ? `<p class="cast-url">Open this address on a TV: <a href="${esc(href)}">${esc(href)}</a></p>`
     : on
       ? `<p class="muted cast-url">The cast link appears when Portal reports an address.</p>`
       : "";
-  const restart = serverCast?.restartNeeded ? `<p class="muted">Portal must restart to change the listen address.</p>` : "";
+  const restart = serverCast?.restartNeeded
+    ? `<div class="row cast-restart"><span class="muted">${esc(CAST_RESTART_TEXT)}</span><button type="button" data-act="${act(() => void restartForCast(status))}"${castLanBusy ? " disabled" : ""}>Restart Portal</button></div>`
+    : "";
   const error = serverCastError ? `<p class="error">${esc(serverCastError)}</p>` : "";
   return `
     <section class="server-card" id="server-cast">
@@ -2605,6 +2612,25 @@ function castSection(status: Status): string {
   `;
 }
 
+const CAST_RESTART_TEXT = "Portal needs to restart before this takes effect.";
+
+/** Restarts Portal so the TV setting applies, as the Portal menu does. */
+async function restartForCast(status: Status): Promise<void> {
+  if (castLanBusy || !window.confirm(LAN_TEXT)) return;
+  castLanBusy = true;
+  setNotice("Restarting Portal…");
+  try {
+    await restartPortal();
+  } catch (err) {
+    setNotice("");
+    serverCastError = detail(err);
+  } finally {
+    castLanBusy = false;
+  }
+  // Only reached when the restart failed: a restart reloads the page.
+  keepFocus(main!, () => paintServer(status, ""));
+}
+
 async function toggleCastLan(status: Status): Promise<void> {
   if (castLanBusy) return;
   const nextLan = serverCast?.lan !== true;
@@ -2613,7 +2639,7 @@ async function toggleCastLan(status: Status): Promise<void> {
   try {
     await saveCastLan(nextLan);
     if (token !== renderToken) return;
-    setNotice(serverCast?.restartNeeded ? "Portal must restart to change the listen address." : "");
+    setNotice("");
     keepFocus(main!, () => paintServer(status, ""));
   } catch (err) {
     serverCastError = detail(err);
@@ -2629,30 +2655,30 @@ async function renderServer(token: number): Promise<void> {
   if (token !== renderToken) return;
   await Promise.all([refreshServerCast(), refreshMeta(), refreshSubs(), refreshDevices()]);
   if (token !== renderToken) return;
-  if (serverCast?.restartNeeded) setNotice("Portal must restart to change the listen address.");
   paintServer(status, "");
 }
 
 function paintServer(status: Status, message: string): void {
   const lines = [
-    ["State", status.state],
+    ["State", status.state.charAt(0).toUpperCase() + status.state.slice(1)],
     ["Version", status.version || ""],
-    ["Process", status.pid ? String(status.pid) : ""],
+    ["Process ID", status.pid ? String(status.pid) : ""],
     ["Started by Portal", status.started_by_us ? "Yes" : "No"],
     ["Window", status.window_visible ? "Shown" : "Hidden"],
     ["Web server", status.webserver ? "On" : "Off"],
   ];
-  const facts = lines.map(([label, value]) => `<div class="row"><span class="muted">${esc(label)}</span><span>${esc(value)}</span></div>`).join("");
+  const facts = lines.map(([label, value]) => `<div class="row fact"><span class="muted">${esc(label)}</span><span>${esc(value)}</span></div>`).join("");
   const error = status.error || message;
   main!.innerHTML = `
     <h1>Server</h1>
-    <section class="server-card">
+    <section class="server-card" id="server-engine">
+      <h2>Kodi engine</h2>
       ${facts}
       ${error ? `<p class="error">${esc(error)}</p>` : ""}
       <div class="row">
-        <button type="button" data-act="${act(() => void serverCall("window", status))}">${status.window_visible ? "Hide window" : "Show window"}</button>
-        <button type="button" data-act="${act(() => void serverCall("restart", status))}">Restart</button>
-        <button type="button" data-act="${act(() => void serverCall("quit", status))}">Quit</button>
+        <button type="button" data-act="${act(() => void serverCall("window", status))}">${status.window_visible ? "Hide Kodi window" : "Show Kodi window"}</button>
+        <button type="button" data-act="${act(() => void serverCall("restart", status))}">Restart Kodi engine</button>
+        <button type="button" data-act="${act(() => void serverCall("quit", status))}">Close Kodi engine</button>
       </div>
     </section>
     ${castSection(status)}
@@ -2802,11 +2828,12 @@ function mediaSection(): string {
       <form id="tmdb-form" class="media-key">
         <label for="tmdb-key">TMDB API key (optional, for richer info)</label>
         <div class="search">
-          <input id="tmdb-key" type="password" autocomplete="off" spellcheck="false" placeholder="${meta.tmdb ? "Paste a new key to replace it" : "Paste a TMDB API key"}" aria-describedby="tmdb-state${serverMetaError ? " tmdb-error" : ""}" />
+          <input id="tmdb-key" type="password" autocomplete="off" spellcheck="false" placeholder="${meta.tmdb ? "Paste a new key" : "Paste a TMDB API key"}" aria-describedby="tmdb-state tmdb-hint${serverMetaError ? " tmdb-error" : ""}" />
           <button type="submit"${busy}>Save</button>
           ${remove}
         </div>
         <p id="tmdb-state" class="${meta.tmdb ? "key-saved" : "muted"}">${esc(state)}</p>
+        <p id="tmdb-hint" class="muted">A free key comes from your account on themoviedb.org → Settings → API.</p>
       </form>
       ${serverMetaNote ? `<p class="muted">${esc(serverMetaNote)}</p>` : ""}
       ${serverMetaError ? `<p class="error" id="tmdb-error">${esc(serverMetaError)}</p>` : ""}
@@ -2912,10 +2939,10 @@ function subKeyPut(source: SubKeySource, value: string | null): SubtitleSettings
   return source.id === "subdl" ? { subdl_key: value } : { subsource_key: value };
 }
 
-/** "A and B", or "A, B, and C". */
+/** "A and B", or "A, B and C". */
 function spokenList(items: string[]): string {
   if (items.length < 3) return items.join(" and ");
-  return items.slice(0, -1).join(", ") + ", and " + items[items.length - 1];
+  return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
 }
 
 function subKeyForm(source: SubKeySource, saved: boolean, busy: string): string {
@@ -2927,7 +2954,7 @@ function subKeyForm(source: SubKeySource, saved: boolean, busy: string): string 
       <form id="${field}-form" class="media-key">
         <label for="${field}">${esc(source.name)} API key (optional, adds ${esc(source.name)} results)</label>
         <div class="search">
-          <input id="${field}" type="password" autocomplete="off" spellcheck="false" placeholder="${saved ? "Paste a new key to replace it" : "Paste a " + esc(source.name) + " API key"}" aria-describedby="${field}-state ${field}-hint${serverSubsError ? " subs-error" : ""}" />
+          <input id="${field}" type="password" autocomplete="off" spellcheck="false" placeholder="${saved ? "Paste a new key" : "Paste a " + esc(source.name) + " API key"}" aria-describedby="${field}-state ${field}-hint${serverSubsError ? " subs-error" : ""}" />
           <button type="submit"${busy}>Save</button>
           ${remove}
         </div>
@@ -2992,7 +3019,7 @@ function subsSection(): string {
   return `
     <section class="server-card" id="server-subs">
       <h2>Subtitles</h2>
-      <p class="muted">The CC button finds subtitles for what you play: Gestdown and TVsubtitles for TV shows, Subtitle Cat for both (machine translations marked), and OpenSubtitles, SubDL and SubSource for both when their keys are saved. Searching sends the title, year, and season and episode to ${esc(spokenList(services))}.</p>
+      <p class="muted">The CC button finds subtitles for what you play. Gestdown and TVsubtitles cover TV shows, Subtitle Cat covers films and TV shows (machine translations are marked), and OpenSubtitles, SubDL and SubSource join in once their keys are saved. Searching sends the title, year, season and episode to ${esc(spokenList(services))}.</p>
       <div class="subs-langs">
         <span id="subs-langs-label">Preferred languages${saved ? "" : " (from your browser)"}</span>
         <ol class="lang-chips" aria-labelledby="subs-langs-label">${chips}</ol>
@@ -3009,7 +3036,7 @@ function subsSection(): string {
       <form id="subs-key-form" class="media-key">
         <label for="subs-key">OpenSubtitles API key (optional, adds OpenSubtitles results)</label>
         <div class="search">
-          <input id="subs-key" type="password" autocomplete="off" spellcheck="false" placeholder="${subs.opensubtitles ? "Paste a new key to replace it" : "Paste an OpenSubtitles API key"}" aria-describedby="subs-key-state subs-key-hint${serverSubsError ? " subs-error" : ""}" />
+          <input id="subs-key" type="password" autocomplete="off" spellcheck="false" placeholder="${subs.opensubtitles ? "Paste a new key" : "Paste an OpenSubtitles API key"}" aria-describedby="subs-key-state subs-key-hint${serverSubsError ? " subs-error" : ""}" />
           <button type="submit"${busy}>Save</button>
           ${removeKey}
         </div>
@@ -3218,7 +3245,7 @@ function updateSection(): string {
   return `
     <section class="server-card update-card" id="server-update">
       <h2>Updates</h2>
-      <div class="row"><span class="muted">Portal version</span><span>${esc(info.current)}</span></div>
+      <div class="row fact"><span class="muted">Portal version</span><span>${esc(info.current)}</span></div>
       ${line ? `<p class="update-line">${esc(line)}</p>` : ""}
       ${meter}
       ${problem ? `<p class="${problemClass}">${esc(problem)}</p>` : ""}

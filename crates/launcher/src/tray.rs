@@ -58,13 +58,14 @@ const OPEN_DEBOUNCE: Duration = Duration::from_millis(800);
 /// Present once the first-run notification was shown.
 const INTRO_MARKER: &str = "tray-intro-shown";
 
+// The dashboard's Portal menu asks the same questions (web/src/appmenu.ts).
 const QUIT_TEXT: &str = "Quit Portal?\n\n\
     This stops the Portal server. Anything playing or casting will stop, and Kodi will close \
     if Portal started it.\n\n\
     Open Portal again from the Start menu or desktop.";
 const RESTART_TEXT: &str = "Restart the Portal server? Anything playing will stop.";
-const LAN_RESTART_TEXT: &str =
-    "Portal needs to restart to apply this. Anything playing will stop. Restart now?";
+const LAN_TEXT: &str =
+    "Portal restarts to change who can reach it. Anything playing will stop. Continue?";
 const UPDATE_HINT: &str = "Right-click the Portal icon and choose Install update.";
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
@@ -525,8 +526,11 @@ fn command(cmd: Cmd) {
                 Err(message) => dialog(|| ui::alert(&message)),
             }
         }
+        // Asked first, as on the dashboard: nothing changes when the answer is no.
         Cmd::ToggleLan => {
-            with_app(App::toggle_lan);
+            if dialog(|| ui::confirm(LAN_TEXT)) {
+                with_app(App::toggle_lan);
+            }
         }
         Cmd::ToggleEncoder => {
             with_app(App::toggle_encoder);
@@ -665,7 +669,7 @@ fn handle(event: Event) {
         }
         Event::Lan(Ok(reply)) => {
             with_app(|app| app.model.lan = Some(reply.lan));
-            if reply.restart_needed && dialog(|| ui::confirm(LAN_RESTART_TEXT)) {
+            if reply.restart_needed {
                 with_app(|app| app.start(Job::Restarting, true, false));
             }
         }
