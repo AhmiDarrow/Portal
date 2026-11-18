@@ -189,6 +189,11 @@ export function describeAddonInstall(name: string): ActivityInput {
   return { title: "Installing " + label, detail: "Downloading it from the repository and writing the files." };
 }
 
+export function describeAddonUpdate(name: string): ActivityInput {
+  const label = visibleText(name) || "this add-on";
+  return { title: "Updating " + label, detail: "Downloading the new version and swapping it in." };
+}
+
 export function describeRemove(kind: "repository" | "video", name: string): ActivityInput {
   const label = visibleText(name) || (kind === "repository" ? "the repository" : "the add-on");
   return {

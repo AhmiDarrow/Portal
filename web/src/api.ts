@@ -294,6 +294,16 @@ export type RepoDetail = {
   items: RepoAddon[];
 };
 
+/** An add-on on this PC that one of its repositories has a newer version of. */
+export type AddonUpdate = {
+  id: string;
+  name: string;
+  installed: string;
+  available: string;
+  repo: string;
+  kind: string;
+};
+
 export type InstallResult = {
   id: string;
   name: string;
@@ -587,6 +597,10 @@ export const api = {
     ),
   removeRepo: (id: string) =>
     send<RemoveResult>("/api/repos/" + encodeURIComponent(id), jsonInit("DELETE")),
+  addonUpdates: (fresh = false) =>
+    send<{ items: AddonUpdate[] }>("/api/addons/updates" + (fresh ? "?fresh=true" : "")),
+  updateAddon: (id: string) =>
+    send<InstallResult>("/api/addons/" + encodeURIComponent(id) + "/update", jsonInit("POST")),
   removeAddon: (id: string) =>
     send<RemoveResult>("/api/addons/" + encodeURIComponent(id), jsonInit("DELETE")),
   restart: () => send<Status>("/api/engine/restart", jsonInit("POST")),

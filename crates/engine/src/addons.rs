@@ -3,7 +3,7 @@
 
 use crate::error::EngineError;
 use flate2::read::GzDecoder;
-use portal_api::{RepoAddon, RepoCard, RepoDetail, RepoList};
+use portal_api::{AddonUpdate, RepoAddon, RepoCard, RepoDetail, RepoList};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::cmp::Ordering;
@@ -26,6 +26,9 @@ const VIDEO_CAP: usize = 800;
 const REPO_CAP: usize = 200;
 const SCAN_CAP: usize = 5_000;
 const CACHE_TTL: Duration = Duration::from_secs(600);
+/// How long the list of add-on updates is kept before the repositories are
+/// read again.
+const UPDATES_TTL: Duration = Duration::from_secs(60 * 60);
 const DEP_DEPTH: usize = 12;
 /// How long a server may take to connect and start its answer.
 const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
@@ -157,7 +160,13 @@ pub struct Addons {
     staging: PathBuf,
     client: Option<reqwest::Client>,
     cache: Mutex<Option<CachedIndex>>,
+    /// The last list of add-on updates, and when it was made.
+    updates: Mutex<Option<(Instant, Vec<AddonUpdate>)>>,
 }
+
+/// One install or update at a time: two must not write into each other's
+/// folder, or into a shared module's.
+static INSTALLING: Mutex<()> = Mutex::new(());
 
 impl Addons {
     pub fn new(
@@ -186,6 +195,7 @@ impl Addons {
             staging: staging.into(),
             client,
             cache: Mutex::new(None),
+            updates: Mutex::new(None),
         }
     }
 
@@ -470,13 +480,7 @@ impl Addons {
         bytes: Vec<u8>,
         accept: Accept,
     ) -> Result<InstallOutcome, EngineError> {
-        let disk = Addons {
-            profile: self.profile.clone(),
-            programs: self.programs.clone(),
-            staging: self.staging.clone(),
-            client: None,
-            cache: Mutex::new(None),
-        };
+        let disk = self.disk_only();
         tokio::task::spawn_blocking(move || disk.commit(stage_zip(&bytes, accept)?))
             .await
             .map_err(|_| EngineError::Message("Could not install this add-on.".into()))?
@@ -500,14 +504,9 @@ impl Addons {
         })
     }
 
-    fn write_staged(&self, staged: &Staged) -> Result<(), EngineError> {
-        if reserved_addon_id(&staged.id) {
-            return Err(EngineError::Message("That file is not an add-on.".into()));
-        }
-        // One install at a time: two installs of the same add-on (or of a
-        // shared module) must not write into each other's folder.
-        static INSTALLING: Mutex<()> = Mutex::new(());
-        let _one = INSTALLING.lock().unwrap_or_else(|err| err.into_inner());
+    /// Writes a staged add-on's files to a folder of their own, checked to
+    /// hold an addon.xml, and returns that folder.
+    fn fill_stage(&self, staged: &Staged) -> Result<PathBuf, EngineError> {
         let stage = self
             .staging
             .join(format!("{}.{}", staged.id, std::process::id()));
@@ -538,6 +537,19 @@ impl Addons {
             let _ = fs::remove_dir_all(&stage);
             return Err(EngineError::Message("That file is not an add-on.".into()));
         }
+        Ok(stage)
+    }
+
+    fn write_staged(&self, staged: &Staged) -> Result<(), EngineError> {
+        if reserved_addon_id(&staged.id) {
+            return Err(EngineError::Message("That file is not an add-on.".into()));
+        }
+        let _one = INSTALLING.lock().unwrap_or_else(|err| err.into_inner());
+        let stage = self.fill_stage(staged)?;
+        let fail = |stage: &Path| {
+            let _ = fs::remove_dir_all(stage);
+            EngineError::Message("Could not install this add-on.".into())
+        };
         let dest_root = self.profile.join("addons");
         if fs::create_dir_all(&dest_root).is_err() {
             return Err(fail(&stage));
@@ -566,6 +578,183 @@ impl Addons {
         }
         let _ = fs::remove_dir_all(&stage);
         Ok(())
+    }
+
+    /// The version of an add-on installed under the Kodi profile.
+    fn profile_version(&self, id: &str) -> Option<String> {
+        let path = self.profile.join("addons").join(id).join("addon.xml");
+        let xml = read_capped(&path, XML_CAP)?;
+        let meta = parse_addon_xml(&xml).ok()?;
+        (meta.id == id && valid_version(&meta.version)).then_some(meta.version)
+    }
+
+    /// Add-ons under the Kodi profile that an installed repository has a
+    /// newer version of: the updates Kodi itself would list. Kept for
+    /// `UPDATES_TTL`; `fresh` reads the repositories again now.
+    pub async fn updates(&self, fresh: bool) -> Result<Vec<AddonUpdate>, EngineError> {
+        if !fresh {
+            let kept = self.updates.lock().unwrap_or_else(|err| err.into_inner());
+            if let Some((at, items)) = kept.as_ref() {
+                if at.elapsed() < UPDATES_TTL {
+                    return Ok(items.clone());
+                }
+            }
+        }
+        let mut found: Vec<AddonUpdate> = Vec::new();
+        for card in self.installed_repos()?.items {
+            // A repository that cannot be read now is skipped; the others still count.
+            let Ok((_, packages)) = self.index_for(&card.id).await else {
+                continue;
+            };
+            for package in packages {
+                let Some(have) = self.profile_version(&package.id) else {
+                    continue;
+                };
+                if version_cmp(&package.version, &have) != Ordering::Greater {
+                    continue;
+                }
+                match found.iter_mut().find(|item| item.id == package.id) {
+                    Some(item) => {
+                        if version_cmp(&package.version, &item.available) == Ordering::Greater {
+                            item.available = package.version.clone();
+                            item.repo = card.id.clone();
+                        }
+                    }
+                    None => found.push(AddonUpdate {
+                        id: package.id.clone(),
+                        name: package.name.clone(),
+                        installed: have,
+                        available: package.version.clone(),
+                        repo: card.id.clone(),
+                        kind: if package.video { "video" } else { "module" }.to_string(),
+                    }),
+                }
+            }
+        }
+        found.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+                .then(left.id.cmp(&right.id))
+        });
+        *self.updates.lock().unwrap_or_else(|err| err.into_inner()) =
+            Some((Instant::now(), found.clone()));
+        Ok(found)
+    }
+
+    /// Replaces an add-on under the Kodi profile with the newest version its
+    /// repositories publish, first installing any module that version needs
+    /// and this PC lacks. The add-on's own data folder is not touched. Kodi
+    /// reads the new version when it starts again.
+    pub async fn update(&self, addon_id: &str) -> Result<InstallOutcome, EngineError> {
+        let addon_id = require_addon_id(addon_id)?;
+        if !self.video_removable(&addon_id) {
+            return Err(EngineError::Message(
+                "Only add-ons added to this PC can be updated here.".into(),
+            ));
+        }
+        let wanted = self
+            .updates(true)
+            .await?
+            .into_iter()
+            .find(|item| item.id == addon_id)
+            .ok_or_else(|| EngineError::Message("This add-on is up to date.".into()))?;
+        let (_, mut packages) = self.index_for(&wanted.repo).await?;
+        let others = |id: &str| id != addon_id && self.on_disk(id);
+        if plan_deps(&packages, &addon_id, &others).is_err() {
+            merge_packages(&mut packages, self.dependency_packages(&wanted.repo).await?);
+        }
+        let order = plan_deps(&packages, &addon_id, &others)?;
+        for id in order {
+            let Some(package) = packages.iter().find(|package| package.id == id) else {
+                self.drop_cache();
+                return Err(EngineError::Message(
+                    "A required add-on is not in this repository.".into(),
+                ));
+            };
+            let done = if id == addon_id {
+                self.replace_package(package).await
+            } else {
+                self.install_package(package).await.map(|_| ())
+            };
+            if let Err(err) = done {
+                self.drop_cache();
+                return Err(err);
+            }
+        }
+        self.drop_cache();
+        tracing::info!(
+            addon = %addon_id,
+            from = %wanted.installed,
+            to = %wanted.available,
+            "Updated an add-on"
+        );
+        Ok(InstallOutcome {
+            id: addon_id,
+            name: wanted.name,
+            kind: wanted.kind,
+            wrote: true,
+        })
+    }
+
+    async fn replace_package(&self, package: &Package) -> Result<(), EngineError> {
+        let bytes = self
+            .download(&package.zip, DOWNLOAD_CAP, "The download did not finish.")
+            .await?;
+        let disk = self.disk_only();
+        let id = package.id.clone();
+        tokio::task::spawn_blocking(move || {
+            disk.replace_staged(&stage_zip(&bytes, Accept::Listed(id))?)
+        })
+        .await
+        .map_err(|_| EngineError::Message("Could not update this add-on.".into()))?
+    }
+
+    /// Swaps an installed add-on's folder for a staged newer copy. The old
+    /// folder is moved aside first and put back if the new one cannot be
+    /// placed, so a failed update leaves the add-on as it was.
+    fn replace_staged(&self, staged: &Staged) -> Result<(), EngineError> {
+        if reserved_addon_id(&staged.id) {
+            return Err(EngineError::Message("That file is not an add-on.".into()));
+        }
+        let _one = INSTALLING.lock().unwrap_or_else(|err| err.into_inner());
+        let dest_root = self.profile.join("addons");
+        let dest = dest_root.join(&staged.id);
+        if !dest.join("addon.xml").is_file() {
+            return Err(EngineError::NotFound);
+        }
+        let stage = self.fill_stage(staged)?;
+        // Beside the add-on, so the move stays on one drive.
+        let old = dest_root.join(format!("{}.portal-old", staged.id));
+        let _ = fs::remove_dir_all(&old);
+        if fs::rename(&dest, &old).is_err() {
+            let _ = fs::remove_dir_all(&stage);
+            return Err(EngineError::Message(
+                "Kodi is using this add-on. Try again in a moment.".into(),
+            ));
+        }
+        let placed = fs::rename(&stage, &dest).is_ok() || copy_tree(&stage, &dest).is_ok();
+        let _ = fs::remove_dir_all(&stage);
+        if !placed {
+            let _ = fs::remove_dir_all(&dest);
+            let _ = fs::rename(&old, &dest);
+            return Err(EngineError::Message("Could not update this add-on.".into()));
+        }
+        let _ = fs::remove_dir_all(&old);
+        Ok(())
+    }
+
+    /// A copy that reads and writes the add-on folders, without the client
+    /// or the caches, for work on a blocking thread.
+    fn disk_only(&self) -> Addons {
+        Addons {
+            profile: self.profile.clone(),
+            programs: self.programs.clone(),
+            staging: self.staging.clone(),
+            client: None,
+            cache: Mutex::new(None),
+            updates: Mutex::new(None),
+        }
     }
 
     fn on_disk(&self, id: &str) -> bool {
@@ -1284,6 +1473,7 @@ fn version_marked(bytes: &[u8]) -> Option<String> {
 struct AddonMeta {
     id: String,
     name: String,
+    version: String,
     points: Vec<String>,
     provides: String,
     broken: String,
@@ -1307,6 +1497,7 @@ fn parse_addon_xml(xml: &str) -> Result<AddonMeta, EngineError> {
     let mut meta = AddonMeta {
         id: String::new(),
         name: String::new(),
+        version: String::new(),
         points: Vec::new(),
         provides: String::new(),
         broken: String::new(),
@@ -1330,6 +1521,7 @@ fn parse_addon_xml(xml: &str) -> Result<AddonMeta, EngineError> {
                 if name == "addon" && meta.id.is_empty() {
                     meta.id = attr_value(&event, "id");
                     meta.name = attr_value(&event, "name");
+                    meta.version = attr_value(&event, "version");
                 } else if name == "extension" {
                     let point = attr_value(&event, "point");
                     if !point.is_empty() {
