@@ -177,6 +177,11 @@ pub(crate) struct Tracker {
     waiting: u32,
     idle: u32,
     failures: u32,
+    /// When the TV began buffering after it had played, and where.
+    stalled: Option<(Instant, f64)>,
+    /// Stalls so far, and their time.
+    stalls: u32,
+    stalled_for: Duration,
 }
 
 impl Tracker {
@@ -189,6 +194,9 @@ impl Tracker {
             waiting: 0,
             idle: 0,
             failures: 0,
+            stalled: None,
+            stalls: 0,
+            stalled_for: Duration::ZERO,
         }
     }
 
@@ -244,6 +252,7 @@ impl Tracker {
                 .is_some_and(|content| content.trim() == self.media);
         match status.state.as_str() {
             "PLAYING" | "PAUSED" | "BUFFERING" => {
+                self.note_stall(status);
                 self.seen_playing = true;
                 self.idle = 0;
                 if let Some(position) = status.current_time {
@@ -272,6 +281,33 @@ impl Tracker {
             },
             // Nothing loaded: the receiver app closed, which some TVs do at the end.
             _ => self.quiet(2),
+        }
+    }
+
+    /// Logs each time the TV stops to buffer once it has played, with
+    /// where and for how long, so a slow source or network shows up.
+    fn note_stall(&mut self, status: &DeviceStatus) {
+        let buffering = status.state == "BUFFERING";
+        match (self.stalled, buffering) {
+            (None, true) if self.seen_playing => {
+                let at = status.current_time.unwrap_or(self.position);
+                self.stalled = Some((Instant::now(), at));
+            }
+            (Some((since, at)), false) => {
+                self.stalled = None;
+                let lasted = since.elapsed();
+                self.stalls += 1;
+                self.stalled_for += lasted;
+                tracing::info!(
+                    position = format!("{at:.0}"),
+                    // Status lines come every few seconds, so this is good to about that.
+                    seconds = format!("{:.0}", lasted.as_secs_f64()),
+                    stalls = self.stalls,
+                    total = format!("{:.0}", self.stalled_for.as_secs_f64()),
+                    "The TV stopped to buffer"
+                );
+            }
+            _ => {}
         }
     }
 
