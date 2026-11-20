@@ -12,6 +12,20 @@ Kodi runs in the background as the engine. It resolves the add-on's items, ffmpe
 
 The films in these pictures are the Blender Foundation's open movies, shown with a demo add-on: Big Buck Bunny, Sintel, Tears of Steel and Elephants Dream, © Blender Foundation, [CC BY](https://creativecommons.org/licenses/by/3.0/).
 
+## How it works
+
+```mermaid
+flowchart LR
+  page[Dashboard in your browser<br/>web/] <-->|/api| http[portal.exe<br/>crates/http]
+  http --> lib[(Watch state<br/>crates/library)]
+  http --> engine[crates/engine]
+  engine <-->|JSON-RPC| kodi[Kodi, hidden<br/>runs your add-on]
+  kodi -->|stream| ffmpeg[ffmpeg]
+  ffmpeg -->|HLS /media| page
+  http --> cast[tools/cast] --> tv[Chromecast / Cast TV]
+  tray[portal-launcher.exe<br/>tray icon] --> http
+```
+
 Portal runs on 64-bit Windows 10 and 11. It comes with no add-ons and no video: you choose the add-on, and its accounts and settings stay yours.
 
 ## Install
