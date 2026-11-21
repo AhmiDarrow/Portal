@@ -987,7 +987,7 @@ fn localize(text: &str, strings: &BTreeMap<i64, String>) -> String {
     plain_label(&expand_setting_tokens(&resolved, strings))
 }
 
-/// `$NUMBER[1337]` is the number itself. `$LOCALIZE[id]` and
+/// `$NUMBER[7]` is the number itself. `$LOCALIZE[id]` and
 /// `$ADDON[addon.id id]` use this add-on's strings when that id is known.
 fn expand_setting_tokens(text: &str, strings: &BTreeMap<i64, String>) -> String {
     let mut current = text.to_string();

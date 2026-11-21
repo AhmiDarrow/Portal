@@ -283,7 +283,7 @@ const EXTENSIONS: &[&str] = &[
 /// The file's tag: one word after the last hyphen once a quality or source
 /// word has come ("x264-TAG", "WEB-DL-TAG[site]"), a bracketed tag there
 /// ("x264-[TAG]"), or a lone word ("TAG").
-/// The hyphen in "Spider-Man.No.Way.Home.1080p" names no group.
+/// The hyphen in "Some-Movie.Title.1080p" names no group.
 fn group_of(name: &str) -> Option<String> {
     let lower = name.to_ascii_lowercase();
     let name = EXTENSIONS
