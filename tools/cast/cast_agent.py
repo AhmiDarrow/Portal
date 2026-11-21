@@ -5,7 +5,8 @@ Speaks the Default Media Receiver through pychromecast. No Cast developer
 app id. One JSON object on stdout. Portal passes commands as argv.
 
 Commands: discover, play, stop, pause, resume, seek, subtitles, volume,
-status, watch.
+status, watch, and serve (one process for many commands and the watch,
+keeping each device's connection; see `serve`).
 `status` prints the device's media status once. `watch` keeps one connection
 open and prints a status line every --interval seconds until it is stopped,
 so Portal can tell when an item has finished without starting Python again
@@ -34,16 +35,34 @@ OVERALL_LIMIT = 38.0
 DISCOVERY_LIMIT = 8.0
 
 
+# `serve` keeps one process and its Cast connections for every command.
+SERVING = False
+_OUT_LOCK = threading.Lock()
+_CTX = threading.local()
+
+
+def write_line(payload: dict[str, Any]) -> None:
+    rid = getattr(_CTX, "rid", None)
+    if rid is not None:
+        payload = {"rid": rid, **payload}
+    text = json.dumps(payload, ensure_ascii=False) + "\n"
+    with _OUT_LOCK:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+
+def cancelled() -> threading.Event | None:
+    return getattr(_CTX, "cancel", None)
+
+
 def emit(payload: dict[str, Any], code: int = 0) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    write_line(payload)
     raise SystemExit(code)
 
 
 def line(payload: dict[str, Any]) -> None:
-    """One JSON line that does not end the process (for watch)."""
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    """One JSON line that does not end the command (for watch)."""
+    write_line(payload)
 
 
 def fail(message: str, code: str = "unavailable") -> None:
@@ -127,9 +146,10 @@ def discover_infos(
         if wanted is not None and browser is not None and wanted(list(browser.devices.values())):
             done.set()
 
+    zc = zeroconf.Zeroconf()
     browser = CastBrowser(
         SimpleCastListener(seen, update_callback=seen),
-        zeroconf.Zeroconf(),
+        zc,
         hosts or None,
     )
     browser.start_discovery()
@@ -140,12 +160,18 @@ def discover_infos(
         # Stopping joins the host browser, which can spend half a minute on a
         # known host that no longer answers. It is a daemon thread, so stop it
         # without waiting.
-        threading.Thread(target=stop_browser, args=(browser,), daemon=True).start()
+        threading.Thread(target=stop_browser, args=(browser, zc), daemon=True).start()
 
 
-def stop_browser(browser: Any) -> None:
+def stop_browser(browser: Any, zc: Any = None) -> None:
     try:
         browser.stop_discovery()
+    except Exception:
+        pass
+    # A long-lived helper would otherwise keep every scan's sockets open.
+    try:
+        if zc is not None:
+            zc.close()
     except Exception:
         pass
 
@@ -672,14 +698,37 @@ class StateChange:
 def do_watch(cast: Any, interval: float, lifetime: float) -> None:
     """A status line every `interval` seconds, and one as soon as the TV's
     state changes. Ends when the TV drops off (Portal starts it again)."""
-    started = time.monotonic()
-    lost_since: float | None = None
+    stop = cancelled()
     change = StateChange()
     try:
         cast.media_controller.register_status_listener(change)
     except Exception:
         pass
-    while True:
+    if stop is not None:
+        # A cancel wakes the wait below as a state change does.
+        threading.Thread(target=lambda: (stop.wait(), change.event.set()), daemon=True).start()
+    try:
+        watch_lines(cast, interval, lifetime, stop, change)
+    finally:
+        # The serving helper keeps the connection, so its listener must not outlive the watch.
+        try:
+            cast.media_controller._status_listeners.remove(change)
+        except Exception:
+            pass
+        if stop is not None:
+            stop.set()
+
+
+def watch_lines(
+    cast: Any,
+    interval: float,
+    lifetime: float,
+    stop: threading.Event | None,
+    change: StateChange,
+) -> None:
+    started = time.monotonic()
+    lost_since: float | None = None
+    while stop is None or not stop.is_set():
         if connected(cast):
             lost_since = None
             refresh_status(cast, min(3.0, interval))
@@ -697,7 +746,54 @@ def do_watch(cast: Any, interval: float, lifetime: float) -> None:
         # A TV that flips state quickly still gets a line at most once a
         # second, so Portal's line counts keep about their length.
         if change.event.wait(interval):
-            time.sleep(min(1.0, interval))
+            if stop is None:
+                time.sleep(min(1.0, interval))
+            else:
+                stop.wait(min(1.0, interval))
+    raise SystemExit(0)
+
+
+# Connections the serving helper keeps, by device id, and a lock per device
+# so a command and the watch do not both connect at once.
+_CASTS: dict[str, Any] = {}
+_CAST_LOCKS: dict[str, threading.Lock] = {}
+_CASTS_LOCK = threading.Lock()
+
+
+def forget_cast(device_id: str) -> None:
+    with _CASTS_LOCK:
+        cast = _CASTS.pop(device_id, None)
+    if cast is not None:
+        threading.Thread(target=close_cast, args=(cast,), daemon=True).start()
+
+
+def shared_cast(
+    device_id: str,
+    host: str | None,
+    port: int,
+    timeout: float,
+    deadline: float,
+    model: str | None,
+    friendly: str | None,
+) -> Any:
+    """The kept connection to the device, or a new one that is then kept."""
+    with _CASTS_LOCK:
+        lock = _CAST_LOCKS.setdefault(device_id, threading.Lock())
+    if not lock.acquire(timeout=within(deadline, timeout)):
+        fail("The Cast device did not answer in time.", "unavailable")
+    try:
+        with _CASTS_LOCK:
+            cast = _CASTS.get(device_id)
+        if cast is not None and connected(cast):
+            return cast
+        if cast is not None:
+            forget_cast(device_id)
+        cast = open_cast(device_id, host, port, timeout, deadline, model, friendly)
+        with _CASTS_LOCK:
+            _CASTS[device_id] = cast
+        return cast
+    finally:
+        lock.release()
 
 
 class Parser(argparse.ArgumentParser):
@@ -757,6 +853,65 @@ def main(argv: list[str] | None = None) -> None:
             sys.stdout.reconfigure(encoding="utf-8")
         except Exception:
             pass
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["serve"]:
+        serve()
+    run(argv)
+
+
+_CANCELS: dict[Any, threading.Event] = {}
+
+
+def run_request(rid: Any, argv: list[str], cancel: threading.Event) -> None:
+    _CTX.rid = rid
+    _CTX.cancel = cancel
+    code = 1
+    try:
+        run(argv)
+        code = 0
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+    except BaseException:
+        code = 1
+    finally:
+        with _CASTS_LOCK:
+            _CANCELS.pop(rid, None)
+        write_line({"end": True, "code": code})
+
+
+def serve() -> None:
+    """One command per stdin line, {"rid", "argv"}. Every line it writes carries
+    the rid, and each command ends with {"end": true, "code"}. {"cancel": rid}
+    ends a watch, {"forget": id} drops a kept connection, {"ping": n} answers
+    {"pong": n}. Ends when stdin closes, so it goes when Portal does."""
+    global SERVING
+    SERVING = True
+    for raw in sys.stdin:
+        try:
+            msg = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(msg, dict):
+            continue
+        if "ping" in msg:
+            write_line({"pong": msg["ping"]})
+        elif "cancel" in msg:
+            with _CASTS_LOCK:
+                event = _CANCELS.get(msg["cancel"])
+            if event is not None:
+                event.set()
+        elif "forget" in msg:
+            forget_cast(str(msg["forget"]))
+        elif "rid" in msg and isinstance(msg.get("argv"), list):
+            event = threading.Event()
+            with _CASTS_LOCK:
+                _CANCELS[msg["rid"]] = event
+            argv = [str(part) for part in msg["argv"]]
+            threading.Thread(target=run_request, args=(msg["rid"], argv, event), daemon=True).start()
+    os._exit(0)
+
+
+def run(argv: list[str]) -> None:
     args = build_parser().parse_args(argv)
     timeout = args.timeout if args.timeout and args.timeout > 0 else 0
     try:
@@ -769,7 +924,7 @@ def main(argv: list[str] | None = None) -> None:
         port = args.port if args.port and args.port > 0 else 8009
         limit = timeout or 20
         deadline = time.monotonic() + OVERALL_LIMIT
-        cast = open_cast(
+        cast = (shared_cast if SERVING else open_cast)(
             device_id,
             host,
             port,
@@ -817,8 +972,16 @@ def main(argv: list[str] | None = None) -> None:
                 do_seek(cast, args.seconds, limit)
             else:
                 fail("Unknown cast command.", "bad_request")
+        except SystemExit:
+            raise
+        except Exception:
+            if SERVING:
+                # A connection that threw may be broken; the next command connects again.
+                forget_cast(device_id)
+            raise
         finally:
-            close_cast(cast)
+            if not SERVING:
+                close_cast(cast)
     except SystemExit:
         raise
     except Exception as exc:
