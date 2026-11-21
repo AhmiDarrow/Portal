@@ -55,19 +55,25 @@ pub fn port_taken_message(port: u16) -> String {
 pub enum Probe {
     Portal,
     Other,
-    /// Something accepted the connection but did not reply in time, usually
-    /// a busy Portal. It is not down, so nothing restarts it.
+    /// Something accepted the connection but did not reply in time. One
+    /// silent check is a busy Portal; many in a row are a hung one (see
+    /// `Model::on_health`).
     Silent,
     Nothing,
 }
 
 pub fn probe(port: u16) -> Probe {
+    probe_pid(port).0
+}
+
+/// The probe, and the pid a Portal's ping named.
+fn probe_pid(port: u16) -> (Probe, Option<u32>) {
     match ask_ping(port) {
-        Ok(Some(response)) if is_portal_ping(&response) => Probe::Portal,
-        Ok(Some(_)) => Probe::Other,
-        Ok(None) => Probe::Nothing,
-        Err(err) if timed_out(&err) => Probe::Silent,
-        Err(_) => Probe::Nothing,
+        Ok(Some(response)) if is_portal_ping(&response) => (Probe::Portal, ping_pid(&response)),
+        Ok(Some(_)) => (Probe::Other, None),
+        Ok(None) => (Probe::Nothing, None),
+        Err(err) if timed_out(&err) => (Probe::Silent, None),
+        Err(_) => (Probe::Nothing, None),
     }
 }
 
@@ -215,6 +221,8 @@ fn call(
 #[derive(Clone, Debug, PartialEq)]
 pub struct Health {
     pub probe: Probe,
+    /// The service's process, from `/api/ping`.
+    pub pid: Option<u32>,
     /// Kodi engine state from `/api/status`: running, starting or stopped.
     pub engine: Option<String>,
     /// Whether TVs on the network may connect, from `/api/cast`.
@@ -246,10 +254,11 @@ pub struct Update {
 }
 
 pub fn health(port: u16) -> Health {
-    let probe = probe(port);
+    let (probe, pid) = probe_pid(port);
     if probe != Probe::Portal {
         return Health {
             probe,
+            pid,
             engine: None,
             lan: None,
             encoder: None,
@@ -264,6 +273,7 @@ pub fn health(port: u16) -> Health {
     };
     Health {
         probe,
+        pid,
         engine: read("/api/status").and_then(|body| engine_state(&body)),
         lan: read("/api/cast").and_then(|body| body["lan"].as_bool()),
         encoder: read("/api/app/encoder").and_then(|body| parse_encoder(&body)),
@@ -528,6 +538,84 @@ fn wait_for_exit(_pid: u32, _limit: Duration) -> bool {
 pub fn restart(port: u16) -> Result<(), String> {
     shutdown(port)?;
     ensure_running(port)
+}
+
+/// Ends Portal process `pid`, which holds the port but stopped answering,
+/// and starts a new one.
+pub fn restart_hung(port: u16, pid: u32) -> Result<(), String> {
+    kill_hung(port, pid)?;
+    ensure_running(port)
+}
+
+/// Kills `pid` unless it answers after all. Only the Portal installed beside
+/// this launcher, as `shutdown` stops.
+fn kill_hung(port: u16, pid: u32) -> Result<(), String> {
+    if probe(port) == Probe::Portal {
+        return Ok(());
+    }
+    if !in_our_folder(pid) {
+        return Err(format!(
+            "Portal (process {pid}) is not the one installed here."
+        ));
+    }
+    terminate(pid)?;
+    let deadline = Instant::now() + STOP_WAIT;
+    while !port_free(port) {
+        if Instant::now() >= deadline {
+            return Err(format!("Port {port} is still held after Portal was ended."));
+        }
+        std::thread::sleep(POLL);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn terminate(pid: u32) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    };
+    let millis = u32::try_from(STOP_WAIT.as_millis()).unwrap_or(u32::MAX);
+    // SAFETY: the handle is checked for null, used here and closed.
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid);
+        if handle.is_null() {
+            return Ok(()); // already gone
+        }
+        let ended = TerminateProcess(handle, 1) != 0
+            && WaitForSingleObject(handle, millis) == WAIT_OBJECT_0;
+        CloseHandle(handle);
+        if ended {
+            Ok(())
+        } else {
+            Err(format!("Portal (process {pid}) could not be ended."))
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn terminate(pid: u32) -> Result<(), String> {
+    let ended = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .status()
+        .is_ok_and(|status| status.success());
+    if ended {
+        Ok(())
+    } else {
+        Err(format!("Portal (process {pid}) could not be ended."))
+    }
+}
+
+/// Adds a line to the service's log, which the next start keeps as
+/// `portal.previous.log`.
+pub fn note(line: &str) {
+    if let Ok(mut log) = fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(log_path())
+    {
+        let _ = writeln!(log, "portal-launcher: {line}");
+    }
 }
 
 fn install_dir() -> Result<PathBuf, String> {

@@ -812,6 +812,34 @@ impl App {
     fn react(&mut self, reaction: Reaction) {
         match reaction {
             Reaction::AutoRestart => self.start(Job::Starting, false, false),
+            Reaction::RestartHung {
+                pid,
+                misses,
+                silent,
+            } => {
+                if self.model.job.is_some() {
+                    return;
+                }
+                service::note(&format!(
+                    "Portal (process {pid}) has not answered {misses} checks in a row over {}s; \
+                     ending it and starting it again.",
+                    silent.as_secs()
+                ));
+                self.model.job = Some(Job::Restarting);
+                let port = self.model.port;
+                self.poster.spawn(move || {
+                    let result = service::restart_hung(port, pid);
+                    if let Err(message) = &result {
+                        service::note(&format!("restarting the hung Portal failed: {message}"));
+                    }
+                    Event::Started {
+                        result,
+                        by_user: false,
+                        first: false,
+                    }
+                });
+                self.refresh_tip();
+            }
             Reaction::GaveUp => self.notify(
                 "Portal's server keeps stopping",
                 "Portal stopped restarting it. Right-click the Portal icon to start it again. \
