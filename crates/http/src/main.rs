@@ -236,6 +236,47 @@ fn main() {
     }
 }
 
+/// Kodi's JSON-RPC port. A debug build lets a test move it with
+/// `PORTAL_TEST_KODI_PORT`, so a test server leaves this PC's Kodi alone.
+fn kodi_port() -> u16 {
+    #[cfg(debug_assertions)]
+    if let Some(port) = std::env::var("PORTAL_TEST_KODI_PORT")
+        .ok()
+        .and_then(|port| port.parse().ok())
+    {
+        return port;
+    }
+    9090
+}
+
+/// Debug builds only, for the tray's hung-server test:
+/// `PORTAL_TEST_FREEZE_AFTER=<seconds>` makes this server freeze then. Every
+/// runtime worker blocks, so connections are still accepted (by the system)
+/// but nothing answers, as with a deadlock.
+#[cfg(debug_assertions)]
+fn spawn_test_freeze() {
+    let Some(after) = std::env::var("PORTAL_TEST_FREEZE_AFTER")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .map(Duration::from_secs)
+    else {
+        return;
+    };
+    let runtime = tokio::runtime::Handle::current();
+    std::thread::spawn(move || {
+        std::thread::sleep(after);
+        tracing::warn!("PORTAL_TEST_FREEZE_AFTER: freezing every worker");
+        // More tasks than workers, so a worker that steals one blocks too.
+        for _ in 0..runtime.metrics().num_workers() * 4 {
+            runtime.spawn(async {
+                loop {
+                    std::thread::sleep(Duration::from_secs(3600));
+                }
+            });
+        }
+    });
+}
+
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let portal_dir = paths::portal_dir();
     std::fs::create_dir_all(&portal_dir)?;
@@ -252,7 +293,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     let supervisor = Supervisor::start(ProcessConfig {
         host: "127.0.0.1".to_string(),
-        port: 9090,
+        port: kodi_port(),
         kodi_exe,
         profile: profile.clone(),
         state_path: portal_dir.join("engine.json"),
@@ -444,6 +485,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Cast url {url}");
     }
 
+    #[cfg(debug_assertions)]
+    spawn_test_freeze();
     update::spawn_automatic(state.clone());
     spawn_stray_watch(state.clone());
     spawn_stuck_close_watch(state.clone());
