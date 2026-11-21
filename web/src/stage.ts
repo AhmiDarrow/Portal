@@ -73,6 +73,34 @@ declare global {
   }
 }
 
+declare const __PORTAL_VERSION__: string;
+
+let hlsLoad: Promise<void> | null = null;
+let hlsSettled = false;
+
+/**
+ * hls.js is large and only playback needs it, so it loads on the first play
+ * (versioned, so the browser keeps it until Portal updates). If it fails,
+ * attachHls falls back to the browser's own HLS as before.
+ */
+export function loadHls(): Promise<void> {
+  hlsLoad ??= new Promise<void>((resolve) => {
+    const script = document.createElement("script");
+    script.src = `/vendor/hls.min.js?v=${encodeURIComponent(__PORTAL_VERSION__)}`;
+    script.onload = script.onerror = () => {
+      hlsSettled = true;
+      resolve();
+    };
+    document.head.append(script);
+  });
+  return hlsLoad;
+}
+
+/** hls.js has loaded, or failed to, so attachHls can run now. */
+export function hlsReady(): boolean {
+  return hlsSettled;
+}
+
 const HLS_RECOVERIES = 6;
 /** A pause this long may leave the playlist stale; playing again reloads it. */
 const RESUME_IDLE_MS = 3000;

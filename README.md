@@ -116,7 +116,7 @@ These environment variables are all optional.
 | `PORTAL_CAST_HOSTS` | extra TV addresses to check, separated by commas |
 | `PORTAL_ENCODER` | the graphics card Portal finds by itself. Set `nvidia`, `intel`, `amd` or `cpu` to name it instead |
 | `PORTAL_TRUST_LAN` | unset. `1` lets every device on your network use Portal without pairing |
-| `PORTAL_ALLOWED_HOSTS` | extra host names Portal answers to, separated by commas. By default it answers only to IP addresses, `localhost` and local names (such as `mypc` or `mypc.local`), so other websites can't reach it |
+| `PORTAL_ALLOWED_HOSTS` | extra host names Portal answers to, separated by commas. By default it answers only to IP addresses, `localhost` and local names (such as `mypc` or `mypc.local`), so other websites can't reach it. On the PC itself, where Portal may change everything, only `localhost`, the PC's own IP addresses and its computer name (`mypc`, `mypc.local`) work, since another device on the network could answer for any other local name |
 | `PORTAL_WEB_DIST`, `PORTAL_HLS_JS` | the install folder's `web\` and `vendor\hls.min.js` |
 | `PORTAL_UPDATE_REPO` | `AhmiDarrow/Portal`: the GitHub repository (owner/name) whose releases Portal updates from |
 | `PORTAL_NO_UPDATE` | unset. `1` turns off the automatic update checks; **Check for updates** still works |
