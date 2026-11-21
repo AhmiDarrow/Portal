@@ -923,6 +923,7 @@ struct ProgressBody {
 
 async fn progress(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(body): Json<ProgressBody>,
 ) -> Result<Json<OkBody>, ApiError> {
     let ProgressBody { report, flush } = body;
@@ -931,10 +932,15 @@ async fn progress(
     }
     // Saving rewrites the library file; it runs off the async threads so
     // other requests are not held up behind the disk.
-    tokio::task::spawn_blocking(move || lock_store(&state).write_progress(&report, flush))
-        .await
-        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Progress was not saved."))?
-        .map_err(from_store)?;
+    // Each address is throttled on its own, so two devices playing at once
+    // do not each make the other's steady playhead look like a seek.
+    let device = peer.ip().to_canonical().to_string();
+    tokio::task::spawn_blocking(move || {
+        lock_store(&state).write_progress_from(&report, flush, &device)
+    })
+    .await
+    .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Progress was not saved."))?
+    .map_err(from_store)?;
     Ok(Json(OkBody { ok: true }))
 }
 
