@@ -3183,20 +3183,189 @@ fn agent_output(
     ))
 }
 
-async fn run_agent(args: Vec<String>, limit: Duration) -> Result<serde_json::Value, AgentFail> {
+type HelperLines = tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>;
+type Pending = std::sync::Mutex<
+    std::collections::HashMap<u64, tokio::sync::mpsc::UnboundedSender<serde_json::Value>>,
+>;
+
+/// The one cast helper process (`cast_agent.py serve`): started on first use,
+/// started again after it dies or wedges, and gone with Portal (its stdin
+/// closes, or `stop_helper`). It keeps each TV's connection between commands,
+/// so a command no longer pays for starting Python and connecting.
+struct Helper {
+    send: tokio::sync::mpsc::UnboundedSender<String>,
+    pending: std::sync::Arc<Pending>,
+    dead: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    child: std::sync::Mutex<Option<tokio::process::Child>>,
+}
+
+static HELPER: std::sync::Mutex<Option<std::sync::Arc<Helper>>> = std::sync::Mutex::new(None);
+static NEXT_RID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// How long a helper that let a command time out has to answer a ping.
+const PING_WAIT: Duration = Duration::from_secs(5);
+
+fn helper() -> Result<std::sync::Arc<Helper>, AgentFail> {
+    let mut slot = HELPER.lock().unwrap_or_else(|err| err.into_inner());
+    if let Some(helper) = slot.as_ref().filter(|helper| !helper.dead.load(std::sync::atomic::Ordering::SeqCst)) {
+        return Ok(helper.clone());
+    }
     let script = crate::paths::cast_agent_script().ok_or(AgentFail::Missing)?;
     let python = crate::paths::cast_python();
     let mut command = agent_command(&python, &script);
-    command.args(&args);
-    let child = command.spawn().map_err(|_| AgentFail::Missing)?;
-    match tokio::time::timeout(limit, child.wait_with_output()).await {
-        Ok(Ok(output)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            agent_output(output.status.success(), &stdout, &stderr)
+    command.arg("serve");
+    command.stdin(std::process::Stdio::piped());
+    // Nothing reads stderr for the helper's life; a full pipe would stall it.
+    command.stderr(std::process::Stdio::null());
+    let mut child = command.spawn().map_err(|_| AgentFail::Missing)?;
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.start_kill();
+        return Err(AgentFail::Unavailable("Cast helper failed.".into()));
+    };
+    let (send, mut outbox) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let pending: std::sync::Arc<Pending> = Default::default();
+    tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        while let Some(text) = outbox.recv().await {
+            if stdin.write_all(text.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
+                break;
+            }
         }
-        Ok(Err(_)) => Err(AgentFail::Unavailable("Cast helper failed.".into())),
-        Err(_) => Err(AgentFail::Timeout),
+    });
+    let routes = pending.clone();
+    let dead = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gone = dead.clone();
+    tokio::spawn(async move {
+        let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(stdout));
+        while let Ok(Some(text)) = lines.next_line().await {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
+                continue;
+            };
+            let Some(rid) = value
+                .get("rid")
+                .or_else(|| value.get("pong"))
+                .and_then(|rid| rid.as_u64())
+            else {
+                continue;
+            };
+            let mut routes = routes.lock().unwrap_or_else(|err| err.into_inner());
+            let last = value.get("end").is_some() || value.get("pong").is_some();
+            if let Some(route) = routes.get(&rid) {
+                let _ = route.send(value);
+            }
+            if last {
+                routes.remove(&rid);
+            }
+        }
+        // Dead: every waiting command and watch hears it, and the next use starts another.
+        gone.store(true, std::sync::atomic::Ordering::SeqCst);
+        routes.lock().unwrap_or_else(|err| err.into_inner()).clear();
+    });
+    let helper = std::sync::Arc::new(Helper {
+        send,
+        pending,
+        dead,
+        child: std::sync::Mutex::new(Some(child)),
+    });
+    *slot = Some(helper.clone());
+    Ok(helper)
+}
+
+impl Helper {
+    fn post(&self, value: serde_json::Value) {
+        let _ = self.send.send(format!("{value}\n"));
+    }
+
+    /// Sends a command; its lines arrive on the receiver, which closes after its end line.
+    fn request(&self, args: &[String]) -> (u64, HelperLines) {
+        let rid = NEXT_RID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.pending
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(rid, tx);
+        self.post(serde_json::json!({ "rid": rid, "argv": args }));
+        (rid, rx)
+    }
+
+    fn cancel(&self, rid: u64) {
+        self.pending
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&rid);
+        self.post(serde_json::json!({ "cancel": rid }));
+    }
+
+    fn kill(&self) {
+        if let Some(mut child) = self.child.lock().unwrap_or_else(|err| err.into_inner()).take() {
+            let _ = child.start_kill();
+        }
+        let mut slot = HELPER.lock().unwrap_or_else(|err| err.into_inner());
+        if slot.as_ref().is_some_and(|held| std::ptr::eq(&**held, self)) {
+            *slot = None;
+        }
+    }
+}
+
+/// After a command ran out of time: drop that TV's kept connection, and kill
+/// the helper if it does not answer a ping either.
+fn after_timeout(helper: std::sync::Arc<Helper>, rid: u64, args: &[String]) {
+    helper.cancel(rid);
+    if let Some(id) = args.iter().position(|arg| arg == "--id").and_then(|at| args.get(at + 1)) {
+        helper.post(serde_json::json!({ "forget": id }));
+    }
+    tokio::spawn(async move {
+        let (ping, mut pong) = {
+            let rid = NEXT_RID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            helper
+                .pending
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .insert(rid, tx);
+            (rid, rx)
+        };
+        helper.post(serde_json::json!({ "ping": ping }));
+        if !matches!(tokio::time::timeout(PING_WAIT, pong.recv()).await, Ok(Some(_))) {
+            tracing::warn!("Cast helper did not answer; starting another");
+            helper.kill();
+        }
+    });
+}
+
+/// Ends the helper with Portal.
+pub(crate) fn stop_helper() {
+    let held = HELPER.lock().unwrap_or_else(|err| err.into_inner()).take();
+    if let Some(helper) = held {
+        helper.kill();
+    }
+}
+
+async fn run_agent(args: Vec<String>, limit: Duration) -> Result<serde_json::Value, AgentFail> {
+    let helper = helper()?;
+    let (rid, mut lines) = helper.request(&args);
+    let mut out = String::new();
+    let ended = tokio::time::timeout(limit, async {
+        while let Some(mut value) = lines.recv().await {
+            if value.get("end").is_some() {
+                return Some(value.get("code").and_then(|code| code.as_i64()) == Some(0));
+            }
+            if let Some(map) = value.as_object_mut() {
+                map.remove("rid");
+            }
+            out.push_str(&value.to_string());
+            out.push('\n');
+        }
+        None
+    })
+    .await;
+    match ended {
+        Ok(Some(ok)) => agent_output(ok, &out, ""),
+        // The helper died during the command.
+        Ok(None) => agent_output(false, &out, ""),
+        Err(_) => {
+            after_timeout(helper, rid, &args);
+            Err(AgentFail::Timeout)
+        }
     }
 }
 
@@ -3241,8 +3410,8 @@ const WATCH_LINE_WAIT: Duration = Duration::from_secs(45);
 /// The helper's `watch` command, started again (after a pause) when it stops.
 struct AgentWatch {
     args: Vec<String>,
-    child: Option<tokio::process::Child>,
-    lines: Option<tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>>,
+    running: Option<(std::sync::Arc<Helper>, u64)>,
+    lines: Option<HelperLines>,
     started: bool,
 }
 
@@ -3250,38 +3419,31 @@ impl AgentWatch {
     fn new(device: &DeviceRef) -> Self {
         Self {
             args: watch_args(device),
-            child: None,
+            running: None,
             lines: None,
             started: false,
         }
     }
 
     fn spawn(&mut self) -> Result<(), String> {
-        let script = crate::paths::cast_agent_script().ok_or("Cast support is not installed.")?;
-        let python = crate::paths::cast_python();
-        let mut command = agent_command(&python, &script);
-        command.args(&self.args);
-        // Nothing reads stderr for the life of a watch; a full pipe would stall it.
-        command.stderr(std::process::Stdio::null());
-        let mut child = command
-            .spawn()
-            .map_err(|_| "Cast support is not installed.".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Cast helper failed.".to_string())?;
-        self.lines = Some(tokio::io::AsyncBufReadExt::lines(
-            tokio::io::BufReader::new(stdout),
-        ));
-        self.child = Some(child);
+        let helper = helper().map_err(|_| "Cast support is not installed.".to_string())?;
+        let (rid, lines) = helper.request(&self.args);
+        self.lines = Some(lines);
+        self.running = Some((helper, rid));
         Ok(())
     }
 
     fn close(&mut self) {
         self.lines = None;
-        if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
+        if let Some((helper, rid)) = self.running.take() {
+            helper.cancel(rid);
         }
+    }
+}
+
+impl Drop for AgentWatch {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -3298,18 +3460,18 @@ impl watch::StatusSource for AgentWatch {
             let Some(lines) = self.lines.as_mut() else {
                 continue;
             };
-            match tokio::time::timeout(WATCH_LINE_WAIT, lines.next_line()).await {
-                Ok(Ok(Some(text))) => {
-                    let text = text.trim();
-                    if !text.starts_with('{') {
-                        continue;
-                    }
-                    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-                        continue;
-                    };
+            match tokio::time::timeout(WATCH_LINE_WAIT, lines.recv()).await {
+                Ok(Some(value)) if value.get("end").is_none() => {
                     return watch::status_from_value(&value);
                 }
-                _ => {
+                Ok(_) => {
+                    self.close();
+                    return Err("The cast helper stopped.".into());
+                }
+                Err(_) => {
+                    if let Some((helper, rid)) = self.running.take() {
+                        after_timeout(helper, rid, &self.args);
+                    }
                     self.close();
                     return Err("The cast helper stopped.".into());
                 }
@@ -3940,6 +4102,28 @@ impl watch::Backend for AppBackend {
 
     fn ahead(&self, watched: &Watched, at: f64) {
         stage_next_file(&self.state.0.player, watched, at);
+    }
+
+    fn near_end(&self, watched: &Watched) {
+        // The same next item and request the autoplay chain will ask for.
+        let fresh = self
+            .state
+            .0
+            .player
+            .job(&watched.job_id)
+            .filter(|job| job.state == portal_api::JobState::Ready && job.playlist.is_some())
+            .and_then(|job| job.next);
+        let Some(next) = fresh
+            .or_else(|| watched.next.clone())
+            .filter(|next| !next.file.trim().is_empty())
+        else {
+            return;
+        };
+        crate::early::want(
+            &self.state,
+            &watched.job_id,
+            watch::next_request(&next, watched.quality),
+        );
     }
 
     fn progress(&self, report: &portal_api::ProgressReport) {

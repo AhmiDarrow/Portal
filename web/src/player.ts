@@ -1877,6 +1877,24 @@ function paintClock(): void {
   else placeHover(hoverX);
 }
 
+/** Seconds before the end when the server starts resolving the next episode (its early::LEAD). */
+const EARLY_LEAD = 60;
+let earlyAskedAt = 0;
+
+/**
+ * Near the end, with autoplay on, asks the server to resolve the next episode now. The play
+ * request at the end (the same body) then gets that job. Asked again every few seconds while
+ * near the end; the server drops it when the asks stop (a seek back, a pause).
+ */
+function askEarly(next: NextItem | null, duration: number, left: number): void {
+  const job = currentJob;
+  if (!next || !job || castMode || !started || !prefs().autoplay) return;
+  if (!(duration > 60 && left > 0 && left <= EARLY_LEAD)) return;
+  const now = Date.now();
+  if (now - earlyAskedAt < 4000) return;
+  earlyAskedAt = now;
+  void api.early(job, playBody(targetFromNext(next))).catch(() => undefined);
+}
 /** The last 20 seconds offer the next episode. */
 function paintUpNext(): void {
   const card = el("dock-upnext");
@@ -1887,6 +1905,7 @@ function paintUpNext(): void {
     !!next && started && !castMode && duration > 60 && left > 0 && left <= 20 &&
     upNextDismissed !== next.file;
   if (show && next) setText(el("dock-upnext-title"), nextDetail(next) || humanTitle(next.title) || "Next episode");
+  askEarly(next, duration, left);
   if (card.hidden === !show) return;
   card.hidden = !show;
   if (show) wake();
