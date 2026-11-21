@@ -197,25 +197,12 @@ fn valid_entry(key: &str, id: &str) -> bool {
 }
 
 fn load(path: &Path) -> (HashMap<String, String>, VecDeque<String>) {
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return (HashMap::new(), VecDeque::new());
-        }
-        Err(err) => {
-            tracing::warn!("season files could not be read: {err}");
-            return (HashMap::new(), VecDeque::new());
-        }
+    let Some(text) = crate::paths::read_settings(path) else {
+        return (HashMap::new(), VecDeque::new());
     };
-    let value: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(value) => value,
-        Err(err) => {
-            tracing::warn!("season files could not be read: {err}");
-            return (HashMap::new(), VecDeque::new());
-        }
-    };
-    let Some(map) = value.as_object() else {
-        tracing::warn!("season files could not be read");
+    let value = serde_json::from_str::<serde_json::Value>(&text).ok();
+    let Some(map) = value.as_ref().and_then(|value| value.as_object()) else {
+        crate::paths::set_aside(path);
         return (HashMap::new(), VecDeque::new());
     };
     let mut saved = HashMap::new();
@@ -243,11 +230,6 @@ fn save(
     order: &VecDeque<String>,
     saved: &HashMap<String, String>,
 ) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
     let mut map = serde_json::Map::new();
     for key in order {
         if let Some(id) = saved.get(key) {
@@ -256,11 +238,13 @@ fn save(
     }
     let mut body = serde_json::to_vec_pretty(&map).map_err(std::io::Error::other)?;
     body.push(b'\n');
-    let part = path.with_extension("json.part");
-    std::fs::write(&part, &body)?;
-    std::fs::rename(&part, path)
+    crate::paths::write_settings(path, &body)
 }
 
 #[cfg(test)]
 #[path = "../../../tests-private/http/src/packs.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests-private/http/src/packs_safety.rs"]
+mod safety_tests;

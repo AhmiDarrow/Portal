@@ -64,10 +64,11 @@ fn clean(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-/// A missing or unreadable file reads as the defaults. A secret that cannot
+/// A missing or unreadable file reads as the defaults; an unreadable one is
+/// not saved over. A secret that cannot
 /// be decrypted (another Windows account's file) reads as missing.
 pub fn load(path: &Path) -> Stored {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Some(text) = crate::paths::read_settings(path) else {
         return Stored::default();
     };
     let file: File = serde_json::from_str(&text).unwrap_or_else(|_| {
@@ -89,11 +90,6 @@ pub fn load(path: &Path) -> Stored {
 }
 
 pub fn save(path: &Path, stored: &Stored) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
     let conceal = |secret: &Option<String>| -> std::io::Result<Option<String>> {
         secret
             .as_deref()
@@ -113,9 +109,7 @@ pub fn save(path: &Path, stored: &Stored) -> std::io::Result<()> {
     };
     let mut body = serde_json::to_vec_pretty(&file).map_err(std::io::Error::other)?;
     body.push(b'\n');
-    let part = path.with_extension("json.part");
-    std::fs::write(&part, body)?;
-    std::fs::rename(&part, path)
+    crate::paths::write_settings(path, &body)
 }
 
 const PROTECTED: &str = "dpapi:";
@@ -229,3 +223,7 @@ mod dpapi {
 #[cfg(test)]
 #[path = "../../../../tests-private/http/src/subtitles/settings.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../../tests-private/http/src/subtitles/settings_safety.rs"]
+mod safety_tests;

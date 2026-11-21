@@ -45,6 +45,68 @@ fn first(candidates: Vec<PathBuf>, exists: fn(&Path) -> bool, fallback: PathBuf)
         .unwrap_or(fallback)
 }
 
+/// Settings files that are there but could not be read or set aside. Saving
+/// over one would replace what it holds with defaults, so `write_settings`
+/// refuses until Portal restarts.
+static HELD: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn hold(path: &Path) {
+    let mut held = HELD.lock().unwrap_or_else(|err| err.into_inner());
+    if !held.iter().any(|item| item == path) {
+        held.push(path.to_path_buf());
+    }
+}
+
+/// Reads a settings file. `None` when it is not there, or when it is there
+/// but still cannot be read after a few tries (antivirus or a backup holding
+/// it): Portal runs on defaults and never saves over it.
+pub fn read_settings(path: &Path) -> Option<String> {
+    let mut tries = 0;
+    loop {
+        match std::fs::read_to_string(path) {
+            Ok(text) => return Some(text),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(_) if tries < 4 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(err) => {
+                tracing::error!(
+                    "{} could not be read ({err}); Portal will not save over it until it restarts",
+                    path.display()
+                );
+                hold(path);
+                return None;
+            }
+        }
+    }
+}
+
+/// Writes a settings file beside itself and swaps it in, so a crash never
+/// leaves half a file. Refused for a file `read_settings` could not read.
+pub fn write_settings(path: &Path, body: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let held = HELD.lock().unwrap_or_else(|err| err.into_inner());
+    if held.iter().any(|item| item == path) {
+        return Err(std::io::Error::other(format!(
+            "{} could not be read when Portal started, so it is not saved over",
+            path.display()
+        )));
+    }
+    drop(held);
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    let part = path.with_extension("json.part");
+    let mut file = std::fs::File::create(&part)?;
+    file.write_all(body)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&part, path)
+}
+
 /// Moves a settings file that no longer parses to `<name>.corrupt-<ms>.json`
 /// beside it, so the next save does not overwrite what it held.
 pub fn set_aside(path: &std::path::Path) {
@@ -59,7 +121,10 @@ pub fn set_aside(path: &std::path::Path) {
     let aside = path.with_file_name(format!("{stem}.corrupt-{ms}.json"));
     match std::fs::rename(path, &aside) {
         Ok(()) => tracing::warn!("{} did not parse; kept it as {}", path.display(), aside.display()),
-        Err(err) => tracing::warn!("{} did not parse and could not be kept aside: {err}", path.display()),
+        Err(err) => {
+            tracing::error!("{} did not parse and could not be kept aside: {err}", path.display());
+            hold(path);
+        }
     }
 }
 

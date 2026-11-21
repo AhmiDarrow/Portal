@@ -46,7 +46,8 @@ struct File {
     tmdb_key: Option<String>,
 }
 
-/// A missing or unreadable file reads as the defaults. A key that cannot be
+/// A missing or unreadable file reads as the defaults; an unreadable one is
+/// not saved over. A key that cannot be
 /// decrypted (another Windows account's file) reads as missing. A key in
 /// plain text, from an earlier version or typed in by hand, is encrypted in
 /// place.
@@ -62,7 +63,7 @@ pub fn load(path: &Path) -> Stored {
 
 /// The settings, and whether the file holds the key in plain text.
 fn read(path: &Path) -> (Stored, bool) {
-    let Ok(text) = std::fs::read_to_string(path) else {
+    let Some(text) = crate::paths::read_settings(path) else {
         return (Stored::default(), false);
     };
     let Ok(file) = serde_json::from_str::<File>(&text) else {
@@ -87,11 +88,6 @@ fn read(path: &Path) -> (Stored, bool) {
 }
 
 pub fn save(path: &Path, stored: &Stored) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
     let tmdb_key = stored
         .tmdb_key
         .as_deref()
@@ -103,9 +99,7 @@ pub fn save(path: &Path, stored: &Stored) -> std::io::Result<()> {
     };
     let mut body = serde_json::to_vec_pretty(&file).map_err(std::io::Error::other)?;
     body.push(b'\n');
-    let part = path.with_extension("json.part");
-    std::fs::write(&part, body)?;
-    std::fs::rename(&part, path)
+    crate::paths::write_settings(path, &body)
 }
 
 #[cfg(test)]
