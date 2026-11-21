@@ -1501,6 +1501,11 @@ body.theater #dock-close { margin: 0; }
 #dock-episode[hidden] { display: none; }
 #dock-close { margin: -0.35rem -0.35rem 0 0; color: var(--muted); }
 #dock-close:hover { color: var(--text); }
+#dock-mini { margin: -0.35rem 0 0 0; color: var(--muted); }
+#dock-mini:hover { color: var(--text); }
+#dock-mini .when-mini,
+.dock.mini #dock-mini .when-big { display: none; }
+.dock.mini #dock-mini .when-mini { display: block; }
 #dock-status { margin: 0; color: var(--gold); white-space: pre-line; overflow-wrap: anywhere; }
 #dock-status:empty { display: none; }
 .dock-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
@@ -2505,3 +2510,61 @@ body.info-open { overflow: hidden; }
 /* A heading with a small action beside it, as on the Source page's Updates. */
 .section-head { justify-content: space-between; }
 .section-head > h2 { margin: 0; }
+
+/* Minimized: a small player in the corner. The same video keeps playing; the rest of the dock waits for Expand. */
+.dock.open.mini {
+  display: grid;
+  grid-template-columns: 8.5rem auto minmax(0, 1fr);
+  grid-template-areas:
+    "pic head head"
+    "pic play clock"
+    "up up up";
+  align-items: center;
+  gap: 0.15rem 0.55rem;
+  left: auto;
+  width: min(27rem, calc(100vw - 1.4rem));
+  padding: 0.5rem;
+}
+/* The stage and its control row give up their boxes, so the picture, play and clock sit in the dock's grid. */
+.dock.mini > #dock-stage,
+.dock.mini #dock-chrome,
+.dock.mini #dock-chrome > .chrome-row { display: contents; }
+.dock.mini #dock-stage > video,
+.dock.mini #dock-stage > .stage-cast,
+.dock.mini #dock-stage > .stage-center { grid-area: pic; }
+.dock.mini #dock-stage > video { width: 100%; max-height: none; border-radius: 8px; background: #000; }
+.dock.mini #dock-stage > .stage-cast { border-radius: 8px; padding: 0.3rem; gap: 0.05rem; }
+.dock.mini .stage-cast span { font-size: 0.7rem; }
+.dock.mini .stage-cast strong { font-size: 0.8rem; }
+.dock.mini #dock-stage > .stage-center { padding: 0; }
+.dock.mini .stage-spinner { width: 1.6rem; height: 1.6rem; }
+.dock.mini #dock-play { grid-area: play; }
+.dock.mini .clock { grid-area: clock; justify-self: start; margin: 0; }
+.dock.mini #dock-upnext { grid-area: up; width: auto; margin: 0.35rem 0 0; justify-self: stretch; }
+.dock.mini .dock-side { grid-area: head; gap: 0.2rem; padding: 0; }
+.dock.mini .dock-head { align-items: center; gap: 0.2rem; }
+.dock.mini #dock-title { font-size: 0.95rem; -webkit-line-clamp: 1; line-clamp: 1; }
+.dock.mini #dock-episode { margin: 0; font-size: 0.8rem; -webkit-line-clamp: 1; line-clamp: 1; }
+.dock.mini #dock-status { font-size: 0.8rem; }
+.dock.mini #dock-mini,
+.dock.mini #dock-close { margin: 0; }
+.dock.mini #dock-stage > .stage-top,
+.dock.mini #dock-big-play,
+.dock.mini #dock-stage-status,
+.dock.mini #dock-stage-cancel,
+.dock.mini #dock-scrub,
+.dock.mini #dock-back,
+.dock.mini #dock-forward,
+.dock.mini .volume,
+.dock.mini .chrome-gap,
+.dock.mini #dock-subs-wrap,
+.dock.mini #dock-pip,
+.dock.mini #dock-theater,
+.dock.mini #dock-full,
+.dock.mini .dock-save,
+.dock.mini .dock-controls { display: none; }
+@media (max-width: 720px) {
+  .dock.open.mini { left: 0; width: auto; grid-template-columns: 7rem auto minmax(0, 1fr); }
+  /* Minimized, the player is small, so the header stays put again. */
+  body.playing:has(.dock.mini) .top { position: sticky; }
+}

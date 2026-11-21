@@ -49,7 +49,7 @@ import {
   type TitleDetail,
   type UpdateInfo,
 } from "./api";
-import { awaitAddonPrompts, mount, play, type PlayTarget } from "./player";
+import { awaitAddonPrompts, mount, playFromLibrary as play, type PlayTarget } from "./player";
 import { RESTART_TEXT, restartPortal, wireAppMenu } from "./appmenu";
 import { syncCast } from "./cast";
 import { plainSettingLabel, settingsAddon } from "./settings-link";
