@@ -589,6 +589,8 @@ function setMini(on: boolean): void {
     }
     theaterBeforeMini = theaterWanted;
     theaterWanted = false;
+    // Minimizing pauses what plays here; a TV keeps playing, since this page is only its remote.
+    if (!castingAway() && !video().paused) video().pause();
   }
   dock.classList.toggle("mini", on);
   const button = el<HTMLButtonElement>("dock-mini");
