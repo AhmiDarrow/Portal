@@ -1234,7 +1234,20 @@ function startTicker(token: number): void {
     if (token !== generation) return;
     void postProgress(false).catch(() => undefined);
     void refreshNext(token);
+    void heartbeat(token);
   }, 8000);
+}
+
+/**
+ * Tells the server this page still has its stream, paused or not; one that
+ * stops asking is treated as gone. A stream the server had to end says why.
+ */
+async function heartbeat(token: number): Promise<void> {
+  const id = currentJob;
+  if (!id || !attached || castMode || skipping) return;
+  const job = await api.job(id).catch(() => null);
+  if (token !== generation || currentJob !== id || skipping) return;
+  if (job?.state === "failed" && job.error) setStatus(job.error);
 }
 
 /** The job last asked for a next episode found after it started. */
