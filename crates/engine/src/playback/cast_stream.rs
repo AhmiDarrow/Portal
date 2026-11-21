@@ -857,6 +857,7 @@ impl Player {
         for run in &old {
             self.note_run_end(&job_id, run);
         }
+        room_to_encode(&dir)?;
         let encoder = self.encoder().await;
         let hdr = source
             .video

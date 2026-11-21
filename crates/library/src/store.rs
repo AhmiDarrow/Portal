@@ -149,9 +149,10 @@ struct FileDoc {
     source: Option<Source>,
 }
 
-/// The playhead last written to disk, so a small nudge does not rewrite the file.
+/// The playhead last written to disk for one device and episode, so a small
+/// nudge does not rewrite the file. Kept per device: two devices playing at
+/// once would otherwise each look like a jump to the other.
 struct ProgressDisk {
-    key: String,
     position: f64,
     duration: f64,
     watched: bool,
@@ -161,7 +162,10 @@ struct ProgressDisk {
 pub struct Store {
     path: PathBuf,
     doc: FileDoc,
-    progress_disk: Option<ProgressDisk>,
+    /// By (device, progress key).
+    progress_disk: HashMap<(String, String), ProgressDisk>,
+    /// The file is there but could not be read: never save over it.
+    held: bool,
 }
 
 /// One Continue Watching card: TV or not, name, season, episode, a film's year.
@@ -169,36 +173,58 @@ type ContinueKey = (bool, String, Option<u32>, Option<u32>, Option<u32>);
 
 impl Store {
     /// A file that no longer parses is set aside as `<name>.corrupt-<ms>.json`
-    /// and the library starts empty, so the service still starts.
+    /// and the library starts empty, so the service still starts. A file that
+    /// is there but cannot be read (antivirus or a backup holding it) is tried
+    /// a few times; after that the library starts empty and is never saved
+    /// over it until Portal restarts.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = path.as_ref().to_path_buf();
-        let doc = if path.is_file() {
-            let bytes = fs::read(&path).map_err(StoreError::Io)?;
-            // A file saved in Notepad can start with a byte order mark.
-            let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
-            match serde_json::from_slice(body) {
-                Ok(doc) => doc,
-                Err(_) => {
-                    let stem = path
-                        .file_stem()
-                        .and_then(|stem| stem.to_str())
-                        .unwrap_or("library");
-                    let aside = path.with_file_name(format!("{stem}.corrupt-{}.json", now_ms()));
-                    fs::rename(&path, &aside).map_err(StoreError::Io)?;
-                    eprintln!(
-                        "library file did not parse; moved it to {} and started empty",
-                        aside.display()
-                    );
-                    FileDoc::default()
+        let mut held = false;
+        let doc = match read_retrying(&path) {
+            Ok(None) => FileDoc::default(),
+            Ok(Some(bytes)) => {
+                // A file saved in Notepad can start with a byte order mark.
+                let body = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
+                match serde_json::from_slice(body) {
+                    Ok(doc) => doc,
+                    Err(_) => {
+                        let stem = path
+                            .file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .unwrap_or("library");
+                        let aside =
+                            path.with_file_name(format!("{stem}.corrupt-{}.json", now_ms()));
+                        match fs::rename(&path, &aside) {
+                            Ok(()) => eprintln!(
+                                "library file did not parse; moved it to {} and started empty",
+                                aside.display()
+                            ),
+                            Err(err) => {
+                                held = true;
+                                eprintln!(
+                                    "library file did not parse and could not be moved aside ({err}); \
+                                     started empty and will not save over it"
+                                );
+                            }
+                        }
+                        FileDoc::default()
+                    }
                 }
             }
-        } else {
-            FileDoc::default()
+            Err(err) => {
+                held = true;
+                eprintln!(
+                    "library file {} could not be read ({err}); started empty and will not save over it",
+                    path.display()
+                );
+                FileDoc::default()
+            }
         };
         let mut store = Self {
             path,
             doc,
-            progress_disk: None,
+            progress_disk: HashMap::new(),
+            held,
         };
         store.prune(now_ms());
         Ok(store)
@@ -861,7 +887,20 @@ impl Store {
         report: &ProgressReport,
         flush: bool,
     ) -> Result<(), StoreError> {
-        self.apply_progress(report, now_ms(), flush)
+        self.write_progress_from(report, flush, "")
+    }
+
+    /// `device` names who reports (a TV, a phone), so each device's playhead
+    /// is throttled on its own. Two devices on the same episode share one
+    /// resume point: the newest report wins, so Continue offers the place
+    /// last played, and the last device to stop or pause leaves its place.
+    pub fn write_progress_from(
+        &mut self,
+        report: &ProgressReport,
+        flush: bool,
+        device: &str,
+    ) -> Result<(), StoreError> {
+        self.apply_progress_from(report, now_ms(), flush, device)
     }
 
     pub fn record_progress_at(
@@ -877,6 +916,16 @@ impl Store {
         report: &ProgressReport,
         at: i64,
         flush: bool,
+    ) -> Result<(), StoreError> {
+        self.apply_progress_from(report, at, flush, "")
+    }
+
+    fn apply_progress_from(
+        &mut self,
+        report: &ProgressReport,
+        at: i64,
+        flush: bool,
+        device: &str,
     ) -> Result<(), StoreError> {
         let name = self.choose_title_name(report.kind, &report.id, &report.name);
         let mut structural =
@@ -921,25 +970,31 @@ impl Store {
             },
         );
         // Progress arrives every few seconds while playing, so the same title
-        // keeps updating its newest row instead of filling history.
-        let mut same_row = false;
-        if let Some(last) = self.doc.history.last_mut() {
-            // The same show can arrive under two addresses (the dashboard's
-            // and a TV's); the same named episode still updates its row.
-            // Only an episode (named, with season and episode) matches by name:
-            // two films can share a title.
-            let same_title = last.id == report.id
-                || (report.kind == TitleKind::Tv
-                    && report.season.is_some()
-                    && report.episode.is_some()
-                    && !name.trim().is_empty()
-                    && last.name.trim().eq_ignore_ascii_case(name.trim()));
-            if last.kind == report.kind
-                && same_title
-                && last.season == report.season
-                && last.episode == report.episode
+        // keeps updating its row instead of filling history. The same show can
+        // arrive under two addresses (the dashboard's and a TV's); the same
+        // named episode still updates its row. Only an episode (named, with
+        // season and episode) matches by name: two films can share a title.
+        let episode_name =
+            (report.kind == TitleKind::Tv && report.season.is_some() && report.episode.is_some())
+                .then(|| name.trim().to_string())
+                .filter(|name| !name.is_empty());
+        let row_at = self.doc.history.iter().rposition(|row| {
+            row.kind == report.kind
+                && row.season == report.season
+                && row.episode == report.episode
+                && (row.id == report.id
+                    || episode_name
+                        .as_deref()
+                        .is_some_and(|name| row.name.trim().eq_ignore_ascii_case(name)))
+        });
+        let same_row = row_at.is_some();
+        if let Some(index) = row_at {
+            // Another device may have played something else meanwhile: the
+            // row moves back to the end. A new order alone waits for the
+            // steady cadence; it is not worth a rewrite of the file.
+            let mut last = self.doc.history.remove(index);
             {
-                same_row = true;
+                let last = &mut last;
                 // The row follows the address now playing: Continue reads the
                 // progress filed under the row's id, so a row left on the old
                 // address would offer that address's stale resume point.
@@ -962,26 +1017,12 @@ impl Store {
                     last.art = report.art.clone();
                 }
             }
+            self.doc.history.push(last);
         }
         if !same_row {
             structural = true;
-            // History lists each title once, at its latest play: an older row for
-            // the same movie or episode goes.
-            let episode_name = (report.kind == TitleKind::Tv
-                && report.season.is_some()
-                && report.episode.is_some())
-            .then(|| name.trim().to_lowercase())
-            .filter(|name| !name.is_empty());
-            self.doc.history.retain(|row| {
-                let same_item = row.kind == report.kind
-                    && row.season == report.season
-                    && row.episode == report.episode;
-                let same_title = row.id == report.id
-                    || episode_name
-                        .as_deref()
-                        .is_some_and(|name| row.name.trim().eq_ignore_ascii_case(name));
-                !(same_item && same_title)
-            });
+            // History lists each title once, at its latest play: no row
+            // matched, so this one is new.
             self.doc.history.push(HistoryRecord {
                 id: report.id.clone(),
                 kind: report.kind,
@@ -1000,24 +1041,37 @@ impl Store {
                 self.doc.history.drain(0..extra);
             }
         }
-        if !self.progress_is_due(&key, position, duration, watched, at, structural || flush) {
-            return Ok(());
-        }
-        self.save()?;
-        self.progress_disk = Some(ProgressDisk {
-            key,
+        let disk_key = (device.to_string(), key);
+        if !self.progress_is_due(
+            &disk_key,
             position,
             duration,
             watched,
             at,
-        });
+            structural || flush,
+        ) {
+            return Ok(());
+        }
+        self.save()?;
+        // Devices and episodes that stopped reporting long ago are forgotten.
+        self.progress_disk
+            .retain(|_, prev| at.saturating_sub(prev.at) < 10 * PROGRESS_KEEP_MS);
+        self.progress_disk.insert(
+            disk_key,
+            ProgressDisk {
+                position,
+                duration,
+                watched,
+                at,
+            },
+        );
         Ok(())
     }
 
     /// Whether this playhead is worth a rewrite of the library file.
     fn progress_is_due(
         &self,
-        key: &str,
+        key: &(String, String),
         position: f64,
         duration: f64,
         watched: bool,
@@ -1028,10 +1082,10 @@ impl Store {
         if force {
             return true;
         }
-        let Some(prev) = &self.progress_disk else {
+        let Some(prev) = self.progress_disk.get(key) else {
             return true;
         };
-        if prev.key != key || prev.watched != watched || (prev.duration - duration).abs() > 1.0 {
+        if prev.watched != watched || (prev.duration - duration).abs() > 1.0 {
             return true;
         }
         // A seek backward, or a jump further than the quiet interval.
@@ -1618,6 +1672,11 @@ impl Store {
     }
 
     fn save(&self) -> Result<(), StoreError> {
+        if self.held {
+            return Err(StoreError::Io(io::Error::other(
+                "the library file could not be read when Portal started, so it is not saved over",
+            )));
+        }
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(StoreError::Io)?;
         }
@@ -1634,6 +1693,23 @@ impl Store {
         drop(file);
         fs::rename(&tmp, &self.path).map_err(StoreError::Io)?;
         Ok(())
+    }
+}
+
+/// The file's bytes, `None` when it is not there. A read that fails (a file
+/// another program holds for a moment) is tried a few times.
+fn read_retrying(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let mut tries = 0;
+    loop {
+        match fs::read(path) {
+            Ok(bytes) => return Ok(Some(bytes)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(_) if tries < 4 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(err) => return Err(err),
+        }
     }
 }
 
@@ -2080,3 +2156,7 @@ fn percent_decode_name(text: &str) -> String {
 #[cfg(test)]
 #[path = "../../../tests-private/library/src/store.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests-private/library/src/store_safety.rs"]
+mod safety_tests;

@@ -110,21 +110,17 @@ pub struct PrefsStore {
 impl PrefsStore {
     pub fn open(dir: &Path) -> Self {
         let path = dir.join("prefs.json");
-        let (prefs, stored, held) = match std::fs::read_to_string(&path) {
-            Ok(text) => match parse_file(&text) {
+        // A file there that cannot be read is held by `read_settings` too,
+        // so saving over it fails.
+        let (prefs, stored, held) = match crate::paths::read_settings(&path) {
+            Some(text) => match parse_file(&text) {
                 Some(prefs) => (prefs, true, false),
                 None => {
                     tracing::warn!("player preferences could not be read");
                     (Prefs::default(), false, true)
                 }
             },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                (Prefs::default(), false, false)
-            }
-            Err(err) => {
-                tracing::warn!("player preferences could not be read: {err}");
-                (Prefs::default(), false, true)
-            }
+            None => (Prefs::default(), false, false),
         };
         Self {
             path,
@@ -263,16 +259,9 @@ fn parse(text: &str) -> Prefs {
 }
 
 fn save(path: &Path, prefs: &Prefs) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    }
     let mut body = serde_json::to_vec_pretty(prefs).map_err(std::io::Error::other)?;
     body.push(b'\n');
-    let part = path.with_extension("json.part");
-    std::fs::write(&part, body)?;
-    std::fs::rename(&part, path)
+    crate::paths::write_settings(path, &body)
 }
 
 fn lock(state: &crate::AppState) -> std::sync::MutexGuard<'_, PrefsStore> {

@@ -4136,7 +4136,7 @@ impl watch::Backend for AppBackend {
                 .store
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            if let Err(err) = store.record_progress(&report) {
+            if let Err(err) = store.write_progress_from(&report, false, "cast") {
                 tracing::warn!("cast progress was not saved: {err}");
             }
         });

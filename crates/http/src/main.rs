@@ -165,6 +165,52 @@ async fn note_server_error(
     response
 }
 
+/// Vite names each built asset after its content, so a browser may keep one
+/// for good; the page that names them is checked every time.
+async fn static_cache(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = request.uri().path();
+    let cache = if path.starts_with("/assets/") {
+        Some("public, max-age=31536000, immutable")
+    } else if ["/api/", "/media/", "/vendor/"].iter().any(|own| path.starts_with(own)) {
+        None
+    } else {
+        Some("no-cache")
+    };
+    let mut response = next.run(request).await;
+    if let Some(cache) = cache {
+        if response.status().is_success() && !response.headers().contains_key(header::CACHE_CONTROL) {
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+        }
+    }
+    response
+}
+
+/// Text is worth compressing; video, pictures and event streams are not,
+/// and a byte range must stay the bytes asked for.
+fn compressible(
+    status: StatusCode,
+    _: axum::http::Version,
+    headers: &HeaderMap,
+    _: &axum::http::Extensions,
+) -> bool {
+    let kind = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    status == StatusCode::OK
+        && !headers.contains_key(header::CONTENT_RANGE)
+        && !kind.starts_with("text/event-stream")
+        && (kind.starts_with("text/")
+            || kind.starts_with("application/json")
+            || kind.starts_with("application/javascript")
+            || kind.starts_with("image/svg+xml"))
+}
+
 fn main() {
     use std::io::IsTerminal;
     tracing_subscriber::fmt()
@@ -191,6 +237,47 @@ fn main() {
     }
 }
 
+/// Kodi's JSON-RPC port. A debug build lets a test move it with
+/// `PORTAL_TEST_KODI_PORT`, so a test server leaves this PC's Kodi alone.
+fn kodi_port() -> u16 {
+    #[cfg(debug_assertions)]
+    if let Some(port) = std::env::var("PORTAL_TEST_KODI_PORT")
+        .ok()
+        .and_then(|port| port.parse().ok())
+    {
+        return port;
+    }
+    9090
+}
+
+/// Debug builds only, for the tray's hung-server test:
+/// `PORTAL_TEST_FREEZE_AFTER=<seconds>` makes this server freeze then. Every
+/// runtime worker blocks, so connections are still accepted (by the system)
+/// but nothing answers, as with a deadlock.
+#[cfg(debug_assertions)]
+fn spawn_test_freeze() {
+    let Some(after) = std::env::var("PORTAL_TEST_FREEZE_AFTER")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .map(Duration::from_secs)
+    else {
+        return;
+    };
+    let runtime = tokio::runtime::Handle::current();
+    std::thread::spawn(move || {
+        std::thread::sleep(after);
+        tracing::warn!("PORTAL_TEST_FREEZE_AFTER: freezing every worker");
+        // More tasks than workers, so a worker that steals one blocks too.
+        for _ in 0..runtime.metrics().num_workers() * 4 {
+            runtime.spawn(async {
+                loop {
+                    std::thread::sleep(Duration::from_secs(3600));
+                }
+            });
+        }
+    });
+}
+
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let portal_dir = paths::portal_dir();
     std::fs::create_dir_all(&portal_dir)?;
@@ -207,7 +294,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     let supervisor = Supervisor::start(ProcessConfig {
         host: "127.0.0.1".to_string(),
-        port: 9090,
+        port: kodi_port(),
         kodi_exe,
         profile: profile.clone(),
         state_path: portal_dir.join("engine.json"),
@@ -386,6 +473,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             state.clone(),
             pairing::require,
         ))
+        .layer(axum::middleware::from_fn(static_cache))
+        .layer(tower_http::compression::CompressionLayer::new().compress_when(compressible))
         .layer(axum::middleware::from_fn(guard::same_site));
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
@@ -398,6 +487,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("Cast url {url}");
     }
 
+    #[cfg(debug_assertions)]
+    spawn_test_freeze();
     update::spawn_automatic(state.clone());
     spawn_stray_watch(state.clone());
     spawn_stuck_close_watch(state.clone());
@@ -932,6 +1023,7 @@ struct ProgressBody {
 
 async fn progress(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(body): Json<ProgressBody>,
 ) -> Result<Json<OkBody>, ApiError> {
     let ProgressBody { report, flush } = body;
@@ -940,10 +1032,15 @@ async fn progress(
     }
     // Saving rewrites the library file; it runs off the async threads so
     // other requests are not held up behind the disk.
-    tokio::task::spawn_blocking(move || lock_store(&state).write_progress(&report, flush))
-        .await
-        .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Progress was not saved."))?
-        .map_err(from_store)?;
+    // Each address is throttled on its own, so two devices playing at once
+    // do not each make the other's steady playhead look like a seek.
+    let device = peer.ip().to_canonical().to_string();
+    tokio::task::spawn_blocking(move || {
+        lock_store(&state).write_progress_from(&report, flush, &device)
+    })
+    .await
+    .map_err(|_| fail(StatusCode::INTERNAL_SERVER_ERROR, "Progress was not saved."))?
+    .map_err(from_store)?;
     Ok(Json(OkBody { ok: true }))
 }
 
@@ -2528,16 +2625,19 @@ fn cors_error(err: ApiError) -> Response {
     response
 }
 
-async fn hls_script() -> Result<Response, ApiError> {
+async fn hls_script(uri: axum::http::Uri) -> Result<Response, ApiError> {
     let path = paths::vendor_hls();
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| fail(StatusCode::NOT_FOUND, "The player script is not installed."))?;
-    Ok(bytes_response(bytes, "text/javascript; charset=utf-8"))
-}
-
-fn bytes_response(bytes: Vec<u8>, content_type: &str) -> Response {
-    cached_body(bytes, content_type, "no-store")
+    // The page asks with Portal's version (`?v=`), which changes with every
+    // release and so with the script; without one the browser checks again.
+    let cache = if uri.query().is_some_and(|query| query.starts_with("v=")) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    Ok(cached_body(bytes, "text/javascript; charset=utf-8", cache))
 }
 
 fn image_response(bytes: Vec<u8>, content_type: &str) -> Response {
