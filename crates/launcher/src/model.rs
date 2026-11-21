@@ -13,6 +13,17 @@ const UPDATE_GRACE: Duration = Duration::from_secs(5 * 60);
 /// An install passes through "idle" only for a moment (after its checks,
 /// which take well under this). Idle for longer means nothing is installing.
 const UPDATE_SETTLE: Duration = Duration::from_secs(2 * 60);
+/// `/api/ping` takes no lock, so a Portal that is only busy still answers it
+/// within the probe's 3 s. A server is hung once this many checks in a row
+/// (5 s apart) went unanswered, over at least `HUNG_FOR`. Counting checks as
+/// well as time keeps a PC waking from sleep from looking like a long silence.
+const HUNG_MISSES: u32 = 6;
+const HUNG_FOR: Duration = Duration::from_secs(45);
+/// Silent for longer than this before restarting while the server is
+/// starting, or Kodi is, or an update check or download runs.
+const HUNG_FOR_BUSY: Duration = Duration::from_secs(3 * 60);
+/// How long after a start the server counts as starting.
+const STARTUP_GRACE: Duration = HUNG_FOR_BUSY;
 
 /// Menu commands. The Win32 menu item ids are these values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,6 +173,14 @@ impl RestartBudget {
 pub enum Reaction {
     /// The service went away on its own: start it again.
     AutoRestart,
+    /// The service holds the port but stopped answering, by `misses` checks
+    /// over `silent`: end it and start a new one. `pid` is the process its
+    /// last answer named; without one, the port's owner is looked up.
+    RestartHung {
+        pid: Option<u32>,
+        misses: u32,
+        silent: Duration,
+    },
     /// It keeps going away: tell the user and stop trying.
     GaveUp,
     UpdateAvailable(String),
@@ -186,6 +205,12 @@ pub struct Model {
     budget: RestartBudget,
     announced_version: Option<String>,
     announced_error: Option<String>,
+    /// The service's process, from its last answer.
+    pid: Option<u32>,
+    started_at: Option<Instant>,
+    /// Unanswered checks in a row, and when the first was.
+    misses: u32,
+    silent_since: Option<Instant>,
 }
 
 impl Model {
@@ -205,6 +230,10 @@ impl Model {
             budget: RestartBudget::new(RESTARTS, RESTART_WINDOW),
             announced_version: None,
             announced_error: None,
+            pid: None,
+            started_at: None,
+            misses: 0,
+            silent_since: None,
         }
     }
 
@@ -250,7 +279,10 @@ impl Model {
     /// it; the job is then `Quitting` and the shutdown should start.
     pub fn started(&mut self, ok: bool, by_user: bool) -> bool {
         self.job = None;
+        self.misses = 0;
+        self.silent_since = None;
         if ok {
+            self.started_at = Some(Instant::now());
             self.service = Service::Running;
             self.gave_up = false;
             if by_user {
@@ -279,8 +311,13 @@ impl Model {
             // A start, restart or quit is deciding the state right now.
             return reactions;
         }
+        if health.probe != Probe::Silent {
+            self.misses = 0;
+            self.silent_since = None;
+        }
         match health.probe {
             Probe::Portal => {
+                self.pid = health.pid;
                 self.service = Service::Running;
                 self.engine = health.engine;
                 self.lan = health.lan;
@@ -292,8 +329,14 @@ impl Model {
                 self.service = Service::PortTaken;
                 self.engine = None;
             }
-            // Connected but slow: keep what we knew and do not restart it.
-            Probe::Silent => return reactions,
+            // Connected but slow: keep what we knew, and restart it only
+            // once it has been silent long enough to be hung.
+            Probe::Silent => {
+                if let Some(reaction) = self.on_silent(now) {
+                    reactions.push(reaction);
+                }
+                return reactions;
+            }
             Probe::Nothing => {
                 self.service = Service::Stopped;
                 self.engine = None;
@@ -333,19 +376,59 @@ impl Model {
             }
         }
         if self.service == Service::Stopped {
-            let updating = self
-                .updating_since
-                .is_some_and(|since| now.saturating_duration_since(since) < UPDATE_GRACE);
-            if !updating && !self.gave_up {
-                if self.budget.take(now) {
-                    reactions.push(Reaction::AutoRestart);
-                } else {
-                    self.gave_up = true;
-                    reactions.push(Reaction::GaveUp);
-                }
+            if let Some(reaction) = self.spend_restart(now, Reaction::AutoRestart) {
+                reactions.push(reaction);
             }
         }
         reactions
+    }
+
+    fn on_silent(&mut self, now: Instant) -> Option<Reaction> {
+        let first = *self.silent_since.get_or_insert(now);
+        self.misses += 1;
+        let silent = now.saturating_duration_since(first);
+        let busy = self
+            .started_at
+            .is_none_or(|at| now.saturating_duration_since(at) < STARTUP_GRACE)
+            || self.engine.as_deref() == Some("starting")
+            || self.update.as_ref().is_some_and(|update| {
+                matches!(
+                    update.state.as_str(),
+                    "checking" | "downloading" | "installing"
+                )
+            });
+        let limit = if busy { HUNG_FOR_BUSY } else { HUNG_FOR };
+        if self.misses < HUNG_MISSES || silent < limit || self.service != Service::Running {
+            return None;
+        }
+        let pid = self.pid;
+        let misses = self.misses;
+        self.misses = 0;
+        self.silent_since = None;
+        self.spend_restart(
+            now,
+            Reaction::RestartHung {
+                pid,
+                misses,
+                silent,
+            },
+        )
+    }
+
+    /// `restart` if the budget allows it, else giving up once.
+    fn spend_restart(&mut self, now: Instant, restart: Reaction) -> Option<Reaction> {
+        let updating = self
+            .updating_since
+            .is_some_and(|since| now.saturating_duration_since(since) < UPDATE_GRACE);
+        if updating || self.gave_up {
+            return None;
+        }
+        if self.budget.take(now) {
+            Some(restart)
+        } else {
+            self.gave_up = true;
+            Some(Reaction::GaveUp)
+        }
     }
 
     pub fn tooltip(&self) -> String {

@@ -677,15 +677,63 @@ def connected(cast: Any) -> bool:
     return bool(getattr(client, "is_connected", True))
 
 
+class StateChange:
+    """Wakes the watch when the TV's player state changes, so Portal hears
+    "playing" or "finished" at once instead of at the next interval."""
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.state: str | None = None
+
+    def new_media_status(self, status: Any) -> None:
+        state = player_state_of(status)
+        if state != self.state:
+            self.state = state
+            self.event.set()
+
+    def load_media_failed(self, _item: Any, _code: Any) -> None:
+        self.event.set()
+
+
 def do_watch(cast: Any, interval: float, lifetime: float) -> None:
-    """A status line every `interval` seconds. Ends when the TV drops off (Portal starts it again)."""
+    """A status line every `interval` seconds, and one as soon as the TV's
+    state changes. Ends when the TV drops off (Portal starts it again)."""
+    stop = cancelled()
+    change = StateChange()
+    try:
+        cast.media_controller.register_status_listener(change)
+    except Exception:
+        pass
+    if stop is not None:
+        # A cancel wakes the wait below as a state change does.
+        threading.Thread(target=lambda: (stop.wait(), change.event.set()), daemon=True).start()
+    try:
+        watch_lines(cast, interval, lifetime, stop, change)
+    finally:
+        # The serving helper keeps the connection, so its listener must not outlive the watch.
+        try:
+            cast.media_controller._status_listeners.remove(change)
+        except Exception:
+            pass
+        if stop is not None:
+            stop.set()
+
+
+def watch_lines(
+    cast: Any,
+    interval: float,
+    lifetime: float,
+    stop: threading.Event | None,
+    change: StateChange,
+) -> None:
     started = time.monotonic()
     lost_since: float | None = None
-    stop = cancelled()
     while stop is None or not stop.is_set():
         if connected(cast):
             lost_since = None
             refresh_status(cast, min(3.0, interval))
+            # A change already in this line does not wake the next one.
+            change.event.clear()
             line(status_row(cast))
         else:
             now = time.monotonic()
@@ -695,10 +743,13 @@ def do_watch(cast: Any, interval: float, lifetime: float) -> None:
                 raise SystemExit(1)
         if lifetime and time.monotonic() - started > lifetime:
             raise SystemExit(0)
-        if stop is None:
-            time.sleep(interval)
-        else:
-            stop.wait(interval)
+        # A TV that flips state quickly still gets a line at most once a
+        # second, so Portal's line counts keep about their length.
+        if change.event.wait(interval):
+            if stop is None:
+                time.sleep(min(1.0, interval))
+            else:
+                stop.wait(min(1.0, interval))
     raise SystemExit(0)
 
 

@@ -63,6 +63,12 @@ struct JobSlot {
     stream_touch: Option<Instant>,
     /// Last time the page asked for the job or one of its files.
     last_touch: Instant,
+    /// Last time any page or TV asked about the job at all, a paused one included.
+    seen: Instant,
+    /// The newest segment a browser fetched, to tell how far the encode is ahead.
+    fetched: Option<u32>,
+    /// The browser's ffmpeg is held because nobody fetched a segment for a while.
+    rested: bool,
 }
 
 /// One embedded subtitle stream as WebVTT on the file's own timeline.
@@ -108,6 +114,22 @@ struct PlayerInner {
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 const IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
 const READY_IDLE_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
+/// A playing browser fetches a 2 s segment every few seconds and buffers at
+/// most a minute ahead, so this long without one is a pause or a gone viewer.
+const REST_AFTER: Duration = Duration::from_secs(3 * 60);
+/// Only an encode this many segments past what the browser fetched rests, so
+/// Play always has a listed segment to fetch, and that fetch wakes it.
+const REST_LEAD: u32 = 15;
+/// A page that is open, even paused or in a background tab, asks about its
+/// job at least once a minute. Nothing for this long: the tab or phone is gone.
+const ABANDON_LIMIT: Duration = Duration::from_secs(20 * 60);
+/// Each encode takes most of the processor or one of the graphics card's
+/// sessions. A viewer, a TV and the next episode starting early fit.
+const MAX_ENCODES: usize = 4;
+/// A new encode needs room for a film's worth of segments.
+const START_FREE: u64 = 3 << 30;
+/// A running encode stops before the drive is full for everything else.
+const KEEP_FREE: u64 = 1 << 30;
 
 #[derive(Clone)]
 pub struct Player {
@@ -150,6 +172,12 @@ impl Player {
             return Err(EngineError::BadRequest(detail.into()));
         }
         let job_id = fresh_id();
+        let busy = self.lock_jobs().values().filter(|slot| encoding(slot)).count();
+        if busy >= MAX_ENCODES {
+            return Err(EngineError::BadRequest(format!(
+                "Portal is already making {busy} videos. Stop one, then play this again."
+            )));
+        }
         let job = PlayJob {
             id: job_id.clone(),
             state: JobState::Working,
@@ -185,6 +213,9 @@ impl Player {
                 parked: false,
                 stream_touch: None,
                 last_touch: Instant::now(),
+                seen: Instant::now(),
+                fetched: None,
+                rested: false,
             },
         );
         self.start_sweeper();
@@ -228,6 +259,7 @@ impl Player {
             let mut jobs = self.lock_jobs();
             if let Some(slot) = jobs.get_mut(id) {
                 touch_unless_ready(slot);
+                slot.seen = Instant::now();
                 note_ffmpeg_exit(slot);
                 return Some(slot.job.clone());
             }
@@ -235,6 +267,7 @@ impl Player {
         let job_id = self.lock_sessions().get(id).cloned()?;
         self.lock_jobs().get_mut(&job_id).map(|slot| {
             touch_unless_ready(slot);
+            slot.seen = Instant::now();
             note_ffmpeg_exit(slot);
             slot.job.clone()
         })
@@ -321,6 +354,7 @@ impl Player {
         let job_id = self.lock_sessions().get(session).cloned();
         if let Some(job_id) = job_id {
             if let Some(slot) = self.lock_jobs().get_mut(&job_id) {
+                slot.seen = Instant::now();
                 if name != "index.m3u8" {
                     slot.last_touch = Instant::now();
                 }
@@ -328,7 +362,15 @@ impl Player {
                 let stream = name == "index.m3u8" || name.ends_with(".ts");
                 if stream && slot.session.as_deref() == Some(session) {
                     slot.stream_touch = Some(Instant::now());
-                    unpark(slot);
+                    if let Some(index) = segment_index(name) {
+                        slot.fetched = Some(index);
+                        slot.rested = false;
+                    }
+                    // A paused player keeps reloading the playlist; only a
+                    // segment wakes an encode that rested for lack of them.
+                    if !slot.rested {
+                        unpark(slot);
+                    }
                 }
             }
         }
@@ -339,6 +381,7 @@ impl Player {
     pub fn keep_alive(&self, job_id: &str) {
         if let Some(slot) = self.lock_jobs().get_mut(job_id) {
             slot.last_touch = Instant::now();
+            slot.seen = Instant::now();
         }
     }
 
@@ -370,18 +413,49 @@ impl Player {
 
     /// Stops every job nobody has asked about for too long, through `stop`,
     /// so ffmpeg is killed and the session folder removed.
+    /// A browser encode nobody fetches from for a while rests, and one whose
+    /// page went quiet altogether is stopped sooner. A drive running out of
+    /// room ends the running browser encodes with a reason the page shows.
     async fn sweep(&self, now: Instant) {
-        let idle: Vec<String> = self
-            .lock_jobs()
-            .iter()
-            .filter(|(_, slot)| {
-                idle_expired(
-                    slot.job.state,
-                    now.saturating_duration_since(slot.last_touch),
-                )
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
+        let root = self.inner.root.clone();
+        let low = tokio::task::spawn_blocking(move || free_bytes(&root))
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|free| free < KEEP_FREE);
+        let mut idle = Vec::new();
+        let mut ended = Vec::new();
+        for (id, slot) in self.lock_jobs().iter_mut() {
+            let fetched = now.saturating_duration_since(slot.last_touch);
+            let heard = now.saturating_duration_since(slot.last_touch.max(slot.seen));
+            if idle_expired(slot.job.state, fetched)
+                || abandoned(slot.job.state, slot.cast.is_some(), heard)
+            {
+                idle.push(id.clone());
+            } else if low && slot.cast.is_none() && encoding(slot) {
+                if let Some(child) = out_of_room(slot) {
+                    ended.push(child);
+                }
+            } else if slot.cast.is_none() && !slot.parked && fetched > REST_AFTER {
+                let written = slot
+                    .dir
+                    .as_ref()
+                    .and_then(|dir| playlist_depth(&dir.join("index.m3u8")))
+                    .filter(|depth| !depth.ended)
+                    .map(|depth| depth.segments);
+                if written.is_some_and(|written| far_ahead(written, slot.fetched)) {
+                    slot.stream_touch = None;
+                    park(slot);
+                    slot.rested = slot.parked;
+                    if slot.rested {
+                        tracing::info!(job = %id, "Resting the encode: no segment fetched");
+                    }
+                }
+            }
+        }
+        for child in ended {
+            let _ = tokio::task::spawn_blocking(move || end_process(&child)).await;
+        }
         for id in idle {
             let _ = self.stop(&id).await;
         }
@@ -742,6 +816,10 @@ impl Player {
         let dir = self.inner.root.join(&session);
         fs::create_dir_all(&dir)
             .map_err(|_| EngineError::Message("Could not open a playback folder.".into()))?;
+        if let Err(err) = room_to_encode(&dir) {
+            remove_dir(&dir);
+            return Err(err);
+        }
         if !self.attach_session(job_id, &session, dir.clone(), cut) {
             remove_dir(&dir);
             return Ok(());
@@ -996,6 +1074,8 @@ impl Player {
         slot.ffmpeg = Some(child);
         slot.stderr = Some(stderr);
         slot.parked = false;
+        slot.rested = false;
+        slot.fetched = None;
         true
     }
 
@@ -1172,6 +1252,69 @@ fn touch_unless_ready(slot: &mut JobSlot) {
     if slot.job.state != JobState::Ready {
         slot.last_touch = Instant::now();
     }
+}
+
+/// A playing job no page or TV has asked about for a long while. A cast is
+/// left to the TV, which can sit paused for hours with the page closed.
+fn abandoned(state: JobState, cast: bool, heard: Duration) -> bool {
+    state == JobState::Ready && !cast && heard > ABANDON_LIMIT
+}
+
+/// An encode that is running: a job still resolving soon starts one, a TV's
+/// stream has its own, and a held or finished ffmpeg costs nothing.
+fn encoding(slot: &JobSlot) -> bool {
+    blocks_engine_restart(slot.job.state)
+        || slot.cast.is_some()
+        || (!slot.parked && slot.ffmpeg.as_ref().is_some_and(|child| !child_exited(child)))
+}
+
+/// The encode has written well past the newest segment the browser fetched.
+fn far_ahead(written: u32, fetched: Option<u32>) -> bool {
+    written >= fetched.map_or(0, |index| index + 1) + REST_LEAD
+}
+
+/// `seg00042.ts` is segment 42.
+fn segment_index(name: &str) -> Option<u32> {
+    name.strip_prefix("seg")?.strip_suffix(".ts")?.parse().ok()
+}
+
+/// Ends a browser encode the drive has no room for. What it made still
+/// plays; the page shows why the rest does not come.
+fn out_of_room(slot: &mut JobSlot) -> Option<Arc<Mutex<Child>>> {
+    let child = slot.ffmpeg.take()?;
+    tracing::warn!(job = %slot.job.id, "Stopping the encode: the drive is nearly full");
+    slot.parked = false;
+    slot.rested = false;
+    slot.job.state = JobState::Failed;
+    slot.job.error = Some(low_disk_message(KEEP_FREE));
+    Some(child)
+}
+
+fn low_disk_message(need: u64) -> String {
+    format!(
+        "The drive Portal makes video on has less than {} GB free. Free some space, then play again.",
+        need >> 30
+    )
+}
+
+/// Refuses a new encode on a drive with too little room left.
+fn room_to_encode(dir: &Path) -> Result<(), EngineError> {
+    match free_bytes(dir) {
+        Some(free) if free < START_FREE => Err(EngineError::Message(low_disk_message(START_FREE))),
+        _ => Ok(()),
+    }
+}
+
+fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free = 0u64;
+    // SAFETY: a NUL-ended path and an out value that both outlive the call.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut())
+    };
+    (ok != 0).then_some(free)
 }
 
 fn idle_expired(state: JobState, idle: Duration) -> bool {

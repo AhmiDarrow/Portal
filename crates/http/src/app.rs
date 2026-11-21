@@ -64,9 +64,9 @@ pub(crate) fn hardware_saved(dir: &std::path::Path) -> bool {
 }
 
 fn save_hardware(dir: &std::path::Path, on: bool) -> std::io::Result<()> {
-    std::fs::write(
-        dir.join(ENCODER_FILE),
-        format!("{}\n", serde_json::json!({ "hardware": on })),
+    crate::paths::write_settings(
+        &dir.join(ENCODER_FILE),
+        format!("{}\n", serde_json::json!({ "hardware": on })).as_bytes(),
     )
 }
 

@@ -31,6 +31,8 @@ import { clampSkip, formatClock, seekValueText } from "./player-time";
 import {
   attachHls,
   dropFocusAfterClick,
+  hlsReady,
+  loadHls,
   onScrubRelease,
   onVideoClick,
   paintBuffered,
@@ -423,6 +425,7 @@ function hideDock(): void {
   if (document.fullscreenElement === el("dock-stage")) void document.exitFullscreen().catch(() => undefined);
   if (document.pictureInPictureElement === video()) void document.exitPictureInPicture().catch(() => undefined);
   el("dock").classList.remove("open");
+  setMini(false);
   document.body.classList.remove("playing");
   // theaterWanted stays, so the next item in this dock session opens wide again.
   applyTheater();
@@ -564,7 +567,56 @@ function applyTheater(): void {
   fitPlayingPadding();
 }
 
+/** Theater was on when the player was minimized, so Expand brings it back. */
+let theaterBeforeMini = false;
+
+function isMini(): boolean {
+  return el("dock").classList.contains("mini");
+}
+
+/** Minimized, the dock shrinks to a corner player and playback carries on. Only the layout changes. */
+function setMini(on: boolean): void {
+  const dock = el("dock");
+  if (isMini() === on) return;
+  if (on) {
+    if (document.fullscreenElement === el("dock-stage")) void document.exitFullscreen().catch(() => undefined);
+    if (castMenuOpen()) {
+      castMenuGen += 1;
+      hideCastMenu();
+      paintCast();
+    }
+    if (subtitleMenuOpen()) {
+      hideSubtitleMenu();
+      paintSubtitleState();
+    }
+    theaterBeforeMini = theaterWanted;
+    theaterWanted = false;
+    // Minimizing pauses what plays here; a TV keeps playing, since this page is only its remote.
+    if (!castingAway() && !video().paused) video().pause();
+  }
+  dock.classList.toggle("mini", on);
+  const button = el<HTMLButtonElement>("dock-mini");
+  const label = on ? "Expand player" : "Minimize player";
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.setAttribute("aria-expanded", on ? "false" : "true");
+  const wide = !on && theaterBeforeMini;
+  if (!on) theaterBeforeMini = false;
+  // toggleTheater refetches the episode list, which may have moved on while minimized.
+  if (wide && dock.classList.contains("open")) toggleTheater();
+  else {
+    if (wide) theaterWanted = true;
+    applyTheater();
+  }
+}
+
 function toggleTheater(): void {
+  // T while minimized opens the player straight into theater.
+  if (isMini()) {
+    theaterBeforeMini = false;
+    setMini(false);
+    theaterWanted = false;
+  }
   theaterWanted = !theaterWanted;
   if (theaterWanted) {
     // Opening wide loads the season again. A quality change does not, so its list stays put.
@@ -1184,7 +1236,20 @@ function startTicker(token: number): void {
     if (token !== generation) return;
     void postProgress(false).catch(() => undefined);
     void refreshNext(token);
+    void heartbeat(token);
   }, 8000);
+}
+
+/**
+ * Tells the server this page still has its stream, paused or not; one that
+ * stops asking is treated as gone. A stream the server had to end says why.
+ */
+async function heartbeat(token: number): Promise<void> {
+  const id = currentJob;
+  if (!id || !attached || castMode || skipping) return;
+  const job = await api.job(id).catch(() => null);
+  if (token !== generation || currentJob !== id || skipping) return;
+  if (job?.state === "failed" && job.error) setStatus(job.error);
 }
 
 /** The job last asked for a next episode found after it started. */
@@ -1217,6 +1282,7 @@ async function jobNext(id: string): Promise<NextItem | null> {
 }
 
 function destroyHls(): void {
+  pendingAttach = null;
   if (hls) hls.destroy();
   hls = null;
   const media = video();
@@ -2216,6 +2282,8 @@ async function toggleDevicePlay(): Promise<void> {
 
 function toggleFullscreen(): void {
   const stage = el("dock-stage");
+  // The minimized stage has no box of its own to fill the screen with.
+  if (isMini() && !document.fullscreenElement) setMini(false);
   if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
   else if (!castingAway()) void stage.requestFullscreen().catch(() => undefined);
 }
@@ -2313,7 +2381,20 @@ async function recoverSkip(id: string, at: number, failure: string, mine: () => 
   play({ ...target, resumeSeconds: at > 60 ? at : undefined });
 }
 
+/** A job waiting for hls.js to load before it attaches. */
+let pendingAttach: PlayJob | null = null;
+
 function attachPlayback(job: PlayJob): void {
+  if (!hlsReady()) {
+    // hls.js loads on the first play; attach once it is here, unless a newer
+    // attach or a stop came first.
+    pendingAttach = job;
+    void loadHls().then(() => {
+      if (pendingAttach === job) attachPlayback(job);
+    });
+    return;
+  }
+  pendingAttach = null;
   const playlist = job.playlist;
   if (!playlist) {
     clearPlayActivity();
@@ -2787,12 +2868,20 @@ async function poll(token: number, jobId: string): Promise<void> {
 let dockOpener: HTMLElement | null = null;
 
 export function play(target: PlayTarget): void {
+  void loadHls();
   const active = document.activeElement;
   if (active instanceof HTMLElement && !el("dock").contains(active) && active !== document.body) dockOpener = active;
   // A fresh start with nothing focused must not hand focus to a control from an earlier play.
   else if (!el("dock").classList.contains("open")) dockOpener = null;
   const token = ++generation;
   void start(target, token);
+}
+
+/** A play picked from the library opens the full player. Next episode and autoplay keep it minimized. */
+export function playFromLibrary(target: PlayTarget): void {
+  play(target);
+  // After play, so the episode hold is set before theater (if it comes back) asks for the list.
+  setMini(false);
 }
 
 function paintPlayStep(token: number, job: PlayJob, prompt: Prompt | null): void {
@@ -4319,6 +4408,8 @@ export function mount(options: { onBrowse: (path: string, picking?: PlayTarget) 
   wireSavedButton(el<HTMLButtonElement>("dock-watchlist"), "watchlist");
   wireSavedButton(el<HTMLButtonElement>("dock-bookmark"), "bookmarks");
   el("dock-info").addEventListener("click", () => openTargetInfo());
+  // One button, so focus stays on it: Expand after minimizing, back in the dock after expanding.
+  el("dock-mini").addEventListener("click", () => setMini(!isMini()));
   el("dock-close").addEventListener("click", () => {
     if (infoOpen()) closeInfo(false);
     generation += 1;

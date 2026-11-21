@@ -17,7 +17,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 thiserror = "2"
 axum = { version = "0.8", features = ["multipart"] }
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
@@ -27,6 +27,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 getrandom = "0.2"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Storage_FileSystem",
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Accessibility",
@@ -40,6 +41,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_Cryptography",
     "Win32_Networking_WinHttp",
     "Win32_UI_Shell",
+    "Win32_NetworkManagement_IpHelper",
 ] }
 
 [profile.release]

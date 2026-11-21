@@ -113,12 +113,12 @@ pub struct Approve {
 impl Pairing {
     pub fn open(portal_dir: &Path) -> Self {
         let path = portal_dir.join("devices.json");
-        let devices = match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str::<Vec<Device>>(&text).unwrap_or_else(|_| {
+        let devices = match crate::paths::read_settings(&path) {
+            Some(text) => serde_json::from_str::<Vec<Device>>(&text).unwrap_or_else(|_| {
                 crate::paths::set_aside(&path);
                 Vec::new()
             }),
-            Err(_) => Vec::new(),
+            None => Vec::new(),
         };
         Self {
             path,
@@ -307,9 +307,7 @@ impl Pairing {
         let Ok(text) = serde_json::to_string_pretty(devices) else {
             return;
         };
-        let part = self.path.with_extension("json.part");
-        if let Err(err) = std::fs::write(&part, text).and_then(|()| std::fs::rename(&part, &self.path))
-        {
+        if let Err(err) = crate::paths::write_settings(&self.path, text.as_bytes()) {
             tracing::warn!("Could not save paired devices: {err}");
         }
     }
@@ -570,3 +568,7 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 #[path = "../../../tests-private/http/src/pairing.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests-private/http/src/pairing_safety.rs"]
+mod safety_tests;

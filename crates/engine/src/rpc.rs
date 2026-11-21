@@ -222,15 +222,31 @@ impl KodiClient {
             serde_json::to_vec(&payload).map_err(|err| RpcFail::Protocol(err.to_string()))?;
         let (tx, rx) = oneshot::channel();
         *self.inner.pending.lock().await = Some((id, Pending(tx)));
-        let write_result = {
+        // A Kodi that stops reading fills the socket buffer and would block
+        // this send, holding the write lock, forever.
+        let write_result = timeout_at(deadline, async {
             let mut slot = self.inner.writer.lock().await;
             let writer = slot.as_mut().ok_or(RpcFail::NotConnected)?;
-            writer.write_all(&bytes).await.and(writer.flush().await)
-        };
-        if write_result.is_err() {
-            self.clear_pending(id).await;
-            self.inner.connected.store(false, Ordering::SeqCst);
-            return Err(RpcFail::Closed);
+            writer
+                .write_all(&bytes)
+                .await
+                .and(writer.flush().await)
+                .map_err(|_| RpcFail::Closed)
+        })
+        .await;
+        match write_result {
+            Ok(Ok(())) => {}
+            Ok(Err(fail)) => {
+                self.clear_pending(id).await;
+                self.inner.connected.store(false, Ordering::SeqCst);
+                return Err(fail);
+            }
+            // Part of the request may be sent, so the stream is out of step:
+            // drop the connection and let the next call reconnect.
+            Err(_) => {
+                self.close().await;
+                return Err(RpcFail::Timeout(method.to_string()));
+            }
         }
         let result = timeout_at(deadline, rx).await;
         self.clear_pending(id).await;
