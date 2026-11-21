@@ -423,6 +423,7 @@ function hideDock(): void {
   if (document.fullscreenElement === el("dock-stage")) void document.exitFullscreen().catch(() => undefined);
   if (document.pictureInPictureElement === video()) void document.exitPictureInPicture().catch(() => undefined);
   el("dock").classList.remove("open");
+  setMini(false);
   document.body.classList.remove("playing");
   // theaterWanted stays, so the next item in this dock session opens wide again.
   applyTheater();
@@ -564,7 +565,54 @@ function applyTheater(): void {
   fitPlayingPadding();
 }
 
+/** Theater was on when the player was minimized, so Expand brings it back. */
+let theaterBeforeMini = false;
+
+function isMini(): boolean {
+  return el("dock").classList.contains("mini");
+}
+
+/** Minimized, the dock shrinks to a corner player and playback carries on. Only the layout changes. */
+function setMini(on: boolean): void {
+  const dock = el("dock");
+  if (isMini() === on) return;
+  if (on) {
+    if (document.fullscreenElement === el("dock-stage")) void document.exitFullscreen().catch(() => undefined);
+    if (castMenuOpen()) {
+      castMenuGen += 1;
+      hideCastMenu();
+      paintCast();
+    }
+    if (subtitleMenuOpen()) {
+      hideSubtitleMenu();
+      paintSubtitleState();
+    }
+    theaterBeforeMini = theaterWanted;
+    theaterWanted = false;
+  }
+  dock.classList.toggle("mini", on);
+  const button = el<HTMLButtonElement>("dock-mini");
+  const label = on ? "Expand player" : "Minimize player";
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.setAttribute("aria-expanded", on ? "false" : "true");
+  const wide = !on && theaterBeforeMini;
+  if (!on) theaterBeforeMini = false;
+  // toggleTheater refetches the episode list, which may have moved on while minimized.
+  if (wide && dock.classList.contains("open")) toggleTheater();
+  else {
+    if (wide) theaterWanted = true;
+    applyTheater();
+  }
+}
+
 function toggleTheater(): void {
+  // T while minimized opens the player straight into theater.
+  if (isMini()) {
+    theaterBeforeMini = false;
+    setMini(false);
+    theaterWanted = false;
+  }
   theaterWanted = !theaterWanted;
   if (theaterWanted) {
     // Opening wide loads the season again. A quality change does not, so its list stays put.
@@ -2197,6 +2245,8 @@ async function toggleDevicePlay(): Promise<void> {
 
 function toggleFullscreen(): void {
   const stage = el("dock-stage");
+  // The minimized stage has no box of its own to fill the screen with.
+  if (isMini() && !document.fullscreenElement) setMini(false);
   if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
   else if (!castingAway()) void stage.requestFullscreen().catch(() => undefined);
 }
@@ -2774,6 +2824,13 @@ export function play(target: PlayTarget): void {
   else if (!el("dock").classList.contains("open")) dockOpener = null;
   const token = ++generation;
   void start(target, token);
+}
+
+/** A play picked from the library opens the full player. Next episode and autoplay keep it minimized. */
+export function playFromLibrary(target: PlayTarget): void {
+  play(target);
+  // After play, so the episode hold is set before theater (if it comes back) asks for the list.
+  setMini(false);
 }
 
 function paintPlayStep(token: number, job: PlayJob, prompt: Prompt | null): void {
@@ -4300,6 +4357,8 @@ export function mount(options: { onBrowse: (path: string, picking?: PlayTarget) 
   wireSavedButton(el<HTMLButtonElement>("dock-watchlist"), "watchlist");
   wireSavedButton(el<HTMLButtonElement>("dock-bookmark"), "bookmarks");
   el("dock-info").addEventListener("click", () => openTargetInfo());
+  // One button, so focus stays on it: Expand after minimizing, back in the dock after expanding.
+  el("dock-mini").addEventListener("click", () => setMini(!isMini()));
   el("dock-close").addEventListener("click", () => {
     if (infoOpen()) closeInfo(false);
     generation += 1;
