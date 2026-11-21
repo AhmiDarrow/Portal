@@ -60,10 +60,50 @@ impl Drop for UserAction {
     }
 }
 
+/// Makes a background "is this dialog ours? then cancel it" and a user
+/// request beginning mutually exclusive. The background holds it across its
+/// check and its cancel; a user request takes it only to mark its start, so
+/// it waits at most for one cancel already under way.
+static KODI_DIALOG: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn begin_user() -> UserAction {
     USER_ACTIVE.fetch_add(1, Ordering::SeqCst);
     USER_GEN.fetch_add(1, Ordering::SeqCst);
     UserAction
+}
+
+/// Marks a user request's start, after any background cancel in progress.
+async fn begin_user_locked() -> UserAction {
+    let _dialog = KODI_DIALOG.lock().await;
+    begin_user()
+}
+
+/// Runs `cancel` only if no user request has begun since `gen`, none is in
+/// flight and `idle` agrees, all under the dialog lock, so no user request
+/// can begin between the check and the cancel. True when it ran.
+async fn as_background<F: std::future::Future<Output = ()>>(
+    gen: u64,
+    idle: impl FnOnce() -> bool,
+    cancel: F,
+) -> bool {
+    let _dialog = KODI_DIALOG.lock().await;
+    if USER_GEN.load(Ordering::SeqCst) != gen || USER_ACTIVE.load(Ordering::SeqCst) != 0 || !idle()
+    {
+        return false;
+    }
+    cancel.await;
+    true
+}
+
+/// Who may close a dialog a stopped background resolve left open.
+#[derive(Clone, Copy)]
+enum Dialogs {
+    /// Nobody: the open dialog may be the one the user is answering.
+    Leave,
+    /// The user's request, before it touches Kodi: every dialog open now is the background's.
+    User,
+    /// The background, only while no user request has begun since this generation.
+    Background(u64),
 }
 
 /// Every background entry, removed; their jobs are for the caller to stop.
@@ -79,7 +119,12 @@ fn drain() -> Vec<Option<String>> {
 /// resolve left open is closed before the request goes on; a prompt answer
 /// passes false, since the open dialog is the one the user is answering.
 pub(crate) async fn user_action(state: &AppState, dialogs: bool) -> UserAction {
-    let action = begin_user();
+    let action = begin_user_locked().await;
+    let dialogs = if dialogs {
+        Dialogs::User
+    } else {
+        Dialogs::Leave
+    };
     for job in drain().into_iter().flatten() {
         let begun = Instant::now();
         release(state, &job, dialogs).await;
@@ -130,17 +175,31 @@ fn still_ours(state: &AppState, gen: u64) -> bool {
         && !user_jobs_busy(|id| state.0.player.job(id).map(|job| job.state))
 }
 
+async fn cancel_open_dialog(state: &AppState) {
+    if let Ok(Some(prompt)) = state.0.prompts.read().await {
+        if prompt.cancellable {
+            let answer = PromptAnswer {
+                id: prompt.id,
+                action: PromptAction::Cancel,
+                text: None,
+                index: None,
+            };
+            let _ = state.0.prompts.answer(&answer).await;
+        }
+    }
+}
+
 /// Stops a background job. The add-on goes on inside Kodi after its job
 /// stops, so with `dialogs` a dialog it has open is closed too, leaving
 /// nothing of a background resolve on screen.
-async fn release(state: &AppState, job_id: &str, dialogs: bool) {
+async fn release(state: &AppState, job_id: &str, dialogs: Dialogs) {
     let resolving = state
         .0
         .player
         .job(job_id)
         .is_some_and(|job| matches!(job.state, JobState::Working | JobState::Prompt));
     let _ = state.0.player.stop(job_id).await;
-    if !(dialogs && resolving) {
+    if matches!(dialogs, Dialogs::Leave) || !resolving {
         return;
     }
     // The add-on can be between two dialogs as its job stops, so it gets a
@@ -149,23 +208,22 @@ async fn release(state: &AppState, job_id: &str, dialogs: bool) {
         if look > 0 {
             tokio::time::sleep(DIALOG_RELOOK).await;
         }
-        if let Ok(Some(prompt)) = state.0.prompts.read().await {
-            if prompt.cancellable {
-                let answer = PromptAnswer {
-                    id: prompt.id,
-                    action: PromptAction::Cancel,
-                    text: None,
-                    index: None,
-                };
-                let _ = state.0.prompts.answer(&answer).await;
+        match dialogs {
+            Dialogs::User => cancel_open_dialog(state).await,
+            Dialogs::Background(gen) => {
+                let idle = || !user_jobs_busy(|id| state.0.player.job(id).map(|job| job.state));
+                if !as_background(gen, idle, cancel_open_dialog(state)).await {
+                    return;
+                }
             }
+            Dialogs::Leave => return,
         }
     }
 }
 
 const DIALOG_RELOOK: Duration = Duration::from_millis(400);
 
-fn stop_later(state: &AppState, job_id: Option<String>, dialogs: bool) {
+fn stop_later(state: &AppState, job_id: Option<String>, dialogs: Dialogs) {
     if let Some(job_id) = job_id {
         let state = state.clone();
         tokio::spawn(async move { release(&state, &job_id, dialogs).await });
@@ -190,7 +248,7 @@ pub(crate) fn want(state: &AppState, for_job: &str, request: PlayRequest) {
         stop_later(
             state,
             old.job_id,
-            still_ours(state, USER_GEN.load(Ordering::SeqCst)),
+            Dialogs::Background(USER_GEN.load(Ordering::SeqCst)),
         );
     }
     list.push(Early {
@@ -223,7 +281,7 @@ pub(crate) async fn claim(state: &AppState, request: &PlayRequest) -> Option<Str
         }
         // The user's play has not touched Kodi yet: any dialog is the background's.
         if let Some(job) = early.job_id {
-            release(state, &job, true).await;
+            release(state, &job, Dialogs::User).await;
         }
     }
     if let Some(id) = &found {
@@ -233,7 +291,13 @@ pub(crate) async fn claim(state: &AppState, request: &PlayRequest) -> Option<Str
 }
 
 /// Removes this early entry (if it is still the same one) and stops its job.
-fn cancel(state: &AppState, for_job: &str, wanted: &serde_json::Value, why: &str, dialogs: bool) {
+fn cancel(
+    state: &AppState,
+    for_job: &str,
+    wanted: &serde_json::Value,
+    why: &str,
+    dialogs: Dialogs,
+) {
     let mut list = lock();
     let Some(at) = list
         .iter()
@@ -251,19 +315,25 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
     let gen = USER_GEN.load(Ordering::SeqCst);
     if !user_idle(&state).await {
         // Asked again in a few seconds; it starts once the user is done.
-        return cancel(&state, &for_job, &wanted, "the user is using Kodi", false);
+        return cancel(
+            &state,
+            &for_job,
+            &wanted,
+            "the user is using Kodi",
+            Dialogs::Leave,
+        );
     }
     let started = crate::begin_play_job(&state, request).await;
     if USER_GEN.load(Ordering::SeqCst) != gen {
         if let Ok(id) = &started {
-            stop_later(&state, Some(id.clone()), false);
+            stop_later(&state, Some(id.clone()), Dialogs::Leave);
         }
         return cancel(
             &state,
             &for_job,
             &wanted,
             "the user began using Kodi",
-            false,
+            Dialogs::Leave,
         );
     }
     let job_id = {
@@ -279,7 +349,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
             (None, Ok(id)) => {
                 // Claimed too soon or dropped while starting.
                 drop(list);
-                stop_later(&state, Some(id), false);
+                stop_later(&state, Some(id), Dialogs::Leave);
                 return;
             }
             (entry, Err(_)) => {
@@ -311,7 +381,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
                 &for_job,
                 &wanted,
                 "the user began using Kodi",
-                false,
+                Dialogs::Leave,
             );
         }
         if !crate::prefs::current(&state).autoplay {
@@ -320,7 +390,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
                 &for_job,
                 &wanted,
                 "autoplay is off",
-                still_ours(&state, gen),
+                Dialogs::Background(gen),
             );
         }
         if asked.elapsed() > UNASKED {
@@ -329,7 +399,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
                 &for_job,
                 &wanted,
                 "no longer near the end",
-                still_ours(&state, gen),
+                Dialogs::Background(gen),
             );
         }
         if state.0.player.job(&for_job).is_none() {
@@ -340,7 +410,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
                     &for_job,
                     &wanted,
                     "the playing job ended",
-                    still_ours(&state, gen),
+                    Dialogs::Background(gen),
                 );
             }
         }
@@ -350,7 +420,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
                 &for_job,
                 &wanted,
                 "it went away",
-                still_ours(&state, gen),
+                Dialogs::Background(gen),
             );
         };
         if job.state != JobState::Working {
@@ -376,7 +446,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
                 &for_job,
                 &wanted,
                 "a dialog that may be the user's is open",
-                false,
+                Dialogs::Leave,
             );
         }
         {
@@ -390,7 +460,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
             }
         }
         tracing::info!(job = %job_id, "Early next episode dropped: the add-on asked a question");
-        release(&state, &job_id, still_ours(&state, gen)).await;
+        release(&state, &job_id, Dialogs::Background(gen)).await;
         return;
     }
 }
@@ -422,9 +492,12 @@ mod tests {
         }
     }
 
-    // One test: the guard is process-wide state.
+    /// The guard is process-wide state, so its tests take turns.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
     #[test]
     fn background_resolves_yield_to_the_user_in_either_order() {
+        let _serial = SERIAL.lock().unwrap_or_else(|err| err.into_inner());
         // The user first: a request in flight, or a user play still resolving,
         // keeps a background resolve from starting.
         let action = begin_user();
@@ -449,5 +522,70 @@ mod tests {
         assert!(lock().is_empty());
         assert_ne!(USER_GEN.load(Ordering::SeqCst), gen);
         drop(action);
+    }
+
+    /// A background check-and-cancel and a user request beginning, raced
+    /// many times on several threads: a cancel never lands after a user
+    /// request has begun, and a user request waits at most for one cancel.
+    #[test]
+    fn a_background_cancel_never_lands_after_a_user_request_began() {
+        use std::sync::Arc;
+        let _serial = SERIAL.lock().unwrap_or_else(|err| err.into_inner());
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (mut cancelled, mut yielded) = (0, 0);
+        runtime.block_on(async {
+            for round in 0..2000u64 {
+                let clock = Arc::new(AtomicU64::new(1));
+                let cancel_at = Arc::new(AtomicU64::new(0));
+                let gen = USER_GEN.load(Ordering::SeqCst);
+                let background = {
+                    let (clock, cancel_at) = (clock.clone(), cancel_at.clone());
+                    tokio::spawn(async move {
+                        for _ in 0..round % 4 {
+                            tokio::task::yield_now().await;
+                        }
+                        as_background(gen, || true, async move {
+                            // A cancel takes a while: room for a user request to slip in.
+                            tokio::task::yield_now().await;
+                            cancel_at.store(clock.fetch_add(1, Ordering::SeqCst), Ordering::SeqCst);
+                        })
+                        .await
+                    })
+                };
+                let user = {
+                    let clock = clock.clone();
+                    tokio::spawn(async move {
+                        for _ in 0..(round / 4) % 4 {
+                            tokio::task::yield_now().await;
+                        }
+                        let action = begin_user_locked().await;
+                        // The user's request touches Kodi from here on.
+                        let began = clock.fetch_add(1, Ordering::SeqCst);
+                        drop(action);
+                        began
+                    })
+                };
+                let ran = background.await.unwrap();
+                let began = user.await.unwrap();
+                if ran {
+                    cancelled += 1;
+                    assert!(
+                        cancel_at.load(Ordering::SeqCst) < began,
+                        "a cancel landed after the user began"
+                    );
+                } else {
+                    yielded += 1;
+                }
+            }
+        });
+        assert_eq!(cancelled + yielded, 2000);
+        assert!(cancelled > 0 && yielded > 0, "both orders were raced");
+        eprintln!(
+            "raced 2000 times: {cancelled} cancels before the user, {yielded} yielded to the user"
+        );
     }
 }
