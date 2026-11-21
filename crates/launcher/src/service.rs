@@ -459,46 +459,113 @@ pub fn shutdown(port: u16) -> Result<bool, String> {
 /// False when that cannot be read.
 #[cfg(windows)]
 pub fn in_our_folder(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-    let Some(ours) = std::env::current_exe()
+    let ours = std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
-    else {
-        return false;
-    };
-    // SAFETY: the handle is checked for null, used once and closed; the
-    // buffer length is passed in and updated by the call.
-    let theirs = unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-        if handle.is_null() {
-            return false;
-        }
-        let mut buf = vec![0u16; 1024];
-        let mut len = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
-        CloseHandle(handle);
-        if ok == 0 {
-            return false;
-        }
-        std::path::PathBuf::from(String::from_utf16_lossy(&buf[..len as usize]))
-    };
-    let Some(theirs) = theirs.parent() else {
-        return false;
-    };
-    let normal = |path: &std::path::Path| {
-        path.to_string_lossy()
-            .trim_end_matches('\\')
-            .to_ascii_lowercase()
-    };
-    normal(theirs) == normal(&ours)
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    let theirs = image_path(pid).and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    match (ours, theirs) {
+        (Some(ours), Some(theirs)) => same_path(&ours, &theirs),
+        _ => false,
+    }
 }
 
 #[cfg(not(windows))]
 pub fn in_our_folder(_pid: u32) -> bool {
     true
+}
+
+/// Windows paths ignore case, and a folder may end in a separator.
+fn same_path(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let normal = |path: &std::path::Path| {
+        path.to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_ascii_lowercase()
+    };
+    normal(a) == normal(b)
+}
+
+/// The full path of process `pid`'s program, when it can be read.
+#[cfg(windows)]
+fn image_path(pid: u32) -> Option<PathBuf> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the handle is checked for null, used once and closed; the
+    // buffer length is passed in and updated by the call.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut buf = vec![0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(handle, 0, buf.as_mut_ptr(), &mut len);
+        CloseHandle(handle);
+        (ok != 0).then(|| PathBuf::from(String::from_utf16_lossy(&buf[..len as usize])))
+    }
+}
+
+#[cfg(not(windows))]
+fn image_path(pid: u32) -> Option<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+/// The process listening on IPv4 TCP `port`, as Windows reports it.
+#[cfg(windows)]
+fn port_owner(port: u16) -> Option<u32> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
+    };
+    const AF_INET: u32 = 2;
+    const ROW: usize = std::mem::size_of::<MIB_TCPROW_OWNER_PID>();
+    let mut size = 0u32;
+    // SAFETY: a null table with size 0 only asks for the size needed.
+    unsafe {
+        GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET,
+            TCP_TABLE_OWNER_PID_LISTENER,
+            0,
+        );
+    }
+    // u32 words keep the rows aligned; the slack covers listeners opened
+    // between the two calls.
+    let mut table = vec![0u32; (size as usize).div_ceil(4) + 16 * ROW / 4];
+    let mut size = u32::try_from(table.len() * 4).ok()?;
+    // SAFETY: the buffer is `size` bytes long and suitably aligned.
+    let status = unsafe {
+        GetExtendedTcpTable(
+            table.as_mut_ptr().cast(),
+            &mut size,
+            0,
+            AF_INET,
+            TCP_TABLE_OWNER_PID_LISTENER,
+            0,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    let count = *table.first()? as usize;
+    if 4 + count * ROW > table.len() * 4 {
+        return None;
+    }
+    // SAFETY: checked above that `count` rows follow the count word.
+    let rows = unsafe {
+        std::slice::from_raw_parts(table.as_ptr().add(1).cast::<MIB_TCPROW_OWNER_PID>(), count)
+    };
+    rows.iter()
+        // The port is in network byte order in the low 16 bits.
+        .find(|row| u16::from_be((row.dwLocalPort & 0xffff) as u16) == port)
+        .map(|row| row.dwOwningPid)
+}
+
+#[cfg(not(windows))]
+fn port_owner(_port: u16) -> Option<u32> {
+    None
 }
 
 fn ping_pid(response: &Response) -> Option<u32> {
@@ -540,22 +607,35 @@ pub fn restart(port: u16) -> Result<(), String> {
     ensure_running(port)
 }
 
-/// Ends Portal process `pid`, which holds the port but stopped answering,
-/// and starts a new one.
-pub fn restart_hung(port: u16, pid: u32) -> Result<(), String> {
-    kill_hung(port, pid)?;
+/// Ends the Portal that holds the port but stopped answering, and starts a
+/// new one. `pid` is the process its last answer named, if any.
+pub fn restart_hung(port: u16, pid: Option<u32>) -> Result<(), String> {
+    kill_hung(port, pid, &install_dir()?.join(service_name()))?;
     ensure_running(port)
 }
 
-/// Kills `pid` unless it answers after all. Only the Portal installed beside
-/// this launcher, as `shutdown` stops.
-fn kill_hung(port: u16, pid: u32) -> Result<(), String> {
+/// Kills the process holding the port unless it answers after all, and only
+/// when its program is `service`, the Portal installed beside this launcher.
+fn kill_hung(port: u16, pid: Option<u32>, service: &std::path::Path) -> Result<(), String> {
     if probe(port) == Probe::Portal {
         return Ok(());
     }
-    if !in_our_folder(pid) {
+    // Who holds the port now wins over a pid an earlier answer named.
+    let Some(pid) = port_owner(port).or(pid) else {
+        return Err(format!("No process could be found holding port {port}."));
+    };
+    let image = image_path(pid);
+    if !image
+        .as_deref()
+        .is_some_and(|image| same_path(image, service))
+    {
+        let holder = image.map_or_else(
+            || "a program that could not be identified".to_string(),
+            |image| image.display().to_string(),
+        );
         return Err(format!(
-            "Portal (process {pid}) is not the one installed here."
+            "port {port} is held by {holder} (process {pid}), not {}; leaving it alone.",
+            service.display()
         ));
     }
     terminate(pid)?;

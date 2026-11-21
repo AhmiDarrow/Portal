@@ -820,9 +820,10 @@ impl App {
                 if self.model.job.is_some() {
                     return;
                 }
+                let process = pid.map_or_else(|| "pid unknown".to_string(), |pid| pid.to_string());
                 service::note(&format!(
-                    "Portal (process {pid}) has not answered {misses} checks in a row over {}s; \
-                     ending it and starting it again.",
+                    "Portal (process {process}) has not answered {misses} checks in a row over \
+                     {}s; ending it and starting it again.",
                     silent.as_secs()
                 ));
                 self.model.job = Some(Job::Restarting);
