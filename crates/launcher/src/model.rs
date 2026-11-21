@@ -173,10 +173,11 @@ impl RestartBudget {
 pub enum Reaction {
     /// The service went away on its own: start it again.
     AutoRestart,
-    /// Process `pid` holds the port but stopped answering, by `misses`
-    /// checks over `silent`: end it and start a new one.
+    /// The service holds the port but stopped answering, by `misses` checks
+    /// over `silent`: end it and start a new one. `pid` is the process its
+    /// last answer named; without one, the port's owner is looked up.
     RestartHung {
-        pid: u32,
+        pid: Option<u32>,
         misses: u32,
         silent: Duration,
     },
@@ -400,9 +401,7 @@ impl Model {
         if self.misses < HUNG_MISSES || silent < limit || self.service != Service::Running {
             return None;
         }
-        // shortcut: without a pid from an earlier answer the hung process
-        // cannot be found; the port's owner could be read with GetExtendedTcpTable.
-        let pid = self.pid?;
+        let pid = self.pid;
         let misses = self.misses;
         self.misses = 0;
         self.silent_since = None;
