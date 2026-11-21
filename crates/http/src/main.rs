@@ -164,6 +164,52 @@ async fn note_server_error(
     response
 }
 
+/// Vite names each built asset after its content, so a browser may keep one
+/// for good; the page that names them is checked every time.
+async fn static_cache(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = request.uri().path();
+    let cache = if path.starts_with("/assets/") {
+        Some("public, max-age=31536000, immutable")
+    } else if ["/api/", "/media/", "/vendor/"].iter().any(|own| path.starts_with(own)) {
+        None
+    } else {
+        Some("no-cache")
+    };
+    let mut response = next.run(request).await;
+    if let Some(cache) = cache {
+        if response.status().is_success() && !response.headers().contains_key(header::CACHE_CONTROL) {
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
+        }
+    }
+    response
+}
+
+/// Text is worth compressing; video, pictures and event streams are not,
+/// and a byte range must stay the bytes asked for.
+fn compressible(
+    status: StatusCode,
+    _: axum::http::Version,
+    headers: &HeaderMap,
+    _: &axum::http::Extensions,
+) -> bool {
+    let kind = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    status == StatusCode::OK
+        && !headers.contains_key(header::CONTENT_RANGE)
+        && !kind.starts_with("text/event-stream")
+        && (kind.starts_with("text/")
+            || kind.starts_with("application/json")
+            || kind.starts_with("application/javascript")
+            || kind.starts_with("image/svg+xml"))
+}
+
 fn main() {
     use std::io::IsTerminal;
     tracing_subscriber::fmt()
@@ -384,6 +430,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             state.clone(),
             pairing::require,
         ))
+        .layer(axum::middleware::from_fn(static_cache))
+        .layer(tower_http::compression::CompressionLayer::new().compress_when(compressible))
         .layer(axum::middleware::from_fn(guard::same_site));
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
@@ -2479,16 +2527,19 @@ fn cors_error(err: ApiError) -> Response {
     response
 }
 
-async fn hls_script() -> Result<Response, ApiError> {
+async fn hls_script(uri: axum::http::Uri) -> Result<Response, ApiError> {
     let path = paths::vendor_hls();
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| fail(StatusCode::NOT_FOUND, "The player script is not installed."))?;
-    Ok(bytes_response(bytes, "text/javascript; charset=utf-8"))
-}
-
-fn bytes_response(bytes: Vec<u8>, content_type: &str) -> Response {
-    cached_body(bytes, content_type, "no-store")
+    // The page asks with Portal's version (`?v=`), which changes with every
+    // release and so with the script; without one the browser checks again.
+    let cache = if uri.query().is_some_and(|query| query.starts_with("v=")) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    Ok(cached_body(bytes, "text/javascript; charset=utf-8", cache))
 }
 
 fn image_response(bytes: Vec<u8>, content_type: &str) -> Response {
