@@ -429,6 +429,9 @@ pub(crate) trait Backend: Send + Sync {
     /// The device is `at` seconds into the file it was given. What follows
     /// that file can be made ready here, before the device runs out.
     fn ahead(&self, _watched: &Watched, _at: f64) {}
+    /// The device is near the end of the whole title (source seconds): the
+    /// next episode's job can start resolving now.
+    fn near_end(&self, _watched: &Watched) {}
     fn progress(&self, report: &ProgressReport);
     fn publish(&self, gen: u64, update: Update);
 }
@@ -611,6 +614,11 @@ async fn observe<B: Backend>(
                 }
                 if let (true, Some(at)) = (active, status.current_time) {
                     backend.ahead(watched, at);
+                }
+                if let (true, Some(at), Some(length)) = (active, position, duration) {
+                    if length - at <= crate::early::LEAD && length > at {
+                        backend.near_end(watched);
+                    }
                 }
                 if ending.is_none() {
                     backend.publish(

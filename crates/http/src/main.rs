@@ -43,6 +43,7 @@ use tower_http::trace::TraceLayer;
 mod app;
 mod backup;
 mod cast;
+mod early;
 mod guard;
 mod job;
 mod metadata;
@@ -320,6 +321,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/prompt", get(prompt_get).post(prompt_post))
         .route("/api/play", post(play_start))
         .route("/api/play/{id}", get(play_job).delete(play_stop))
+        .route("/api/play/{id}/early", post(play_early))
         .route("/api/play/{id}/seek", post(play_seek))
         .route("/api/play/{id}/quality", post(play_quality))
         .route("/api/play/{id}/audio", post(play_audio))
@@ -427,6 +429,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         } => {}
     }
 
+    cast::stop_helper();
     // Only a Kodi this process started is quit; an attached one is left alone.
     let _ = tokio::time::timeout(Duration::from_secs(10), state.0.supervisor.quit()).await;
     Ok(())
@@ -1580,9 +1583,36 @@ async fn play_start(
     Ok(Json(PlayAccepted { id }))
 }
 
-/// Starts a play job, with the next episode it leads to. Also used when a
-/// device cast moves on to the next episode by itself.
-async fn start_play_job(state: &AppState, mut request: PlayRequest) -> Result<String, ApiError> {
+/// Starts a play job, with the next episode it leads to, or hands over the
+/// one already resolving for exactly this request. Also used when a device
+/// cast moves on to the next episode by itself.
+async fn start_play_job(state: &AppState, request: PlayRequest) -> Result<String, ApiError> {
+    if let Some(id) = early::claim(state, &request) {
+        return Ok(id);
+    }
+    begin_play_job(state, request).await
+}
+
+/// `POST /api/play/{id}/early`: job `id` is near its end and the body is the
+/// request that plays next.
+async fn play_early(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+    Json(request): Json<PlayRequest>,
+) -> Result<Json<OkBody>, ApiError> {
+    if remote_request(peer, &headers) && !remote_may_open(&state, &request.file) {
+        return Err(fail(StatusCode::FORBIDDEN, REMOTE_ADDON_ONLY));
+    }
+    if state.0.player.job(&id).is_none() {
+        return Err(fail(StatusCode::NOT_FOUND, "That item is gone."));
+    }
+    early::want(&state, &id, request);
+    Ok(Json(OkBody { ok: true }))
+}
+
+async fn begin_play_job(state: &AppState, mut request: PlayRequest) -> Result<String, ApiError> {
     if request.file.trim().is_empty() {
         return Err(fail(StatusCode::BAD_REQUEST, "Missing a file."));
     }

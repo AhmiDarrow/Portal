@@ -571,6 +571,8 @@ export const api = {
     send<{ ok: boolean }>("/api/prompt", jsonInit("POST", body)),
   play: (body: Record<string, unknown>) => send<{ id: string }>("/api/play", jsonInit("POST", body)),
   job: (id: string) => send<PlayJob>("/api/play/" + encodeURIComponent(id)),
+  early: (id: string, body: Record<string, unknown>) =>
+    send<{ ok: boolean }>("/api/play/" + encodeURIComponent(id) + "/early", jsonInit("POST", body)),
   seek: (id: string, seconds: number) =>
     send<PlayJob>("/api/play/" + encodeURIComponent(id) + "/seek", jsonInit("POST", { seconds })),
   /** Restarts the job's stream at `seconds` in a new quality; the add-on is not asked again. */
