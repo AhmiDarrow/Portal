@@ -31,6 +31,8 @@ import { clampSkip, formatClock, seekValueText } from "./player-time";
 import {
   attachHls,
   dropFocusAfterClick,
+  hlsReady,
+  loadHls,
   onScrubRelease,
   onVideoClick,
   paintBuffered,
@@ -1280,6 +1282,7 @@ async function jobNext(id: string): Promise<NextItem | null> {
 }
 
 function destroyHls(): void {
+  pendingAttach = null;
   if (hls) hls.destroy();
   hls = null;
   const media = video();
@@ -2359,7 +2362,20 @@ async function recoverSkip(id: string, at: number, failure: string, mine: () => 
   play({ ...target, resumeSeconds: at > 60 ? at : undefined });
 }
 
+/** A job waiting for hls.js to load before it attaches. */
+let pendingAttach: PlayJob | null = null;
+
 function attachPlayback(job: PlayJob): void {
+  if (!hlsReady()) {
+    // hls.js loads on the first play; attach once it is here, unless a newer
+    // attach or a stop came first.
+    pendingAttach = job;
+    void loadHls().then(() => {
+      if (pendingAttach === job) attachPlayback(job);
+    });
+    return;
+  }
+  pendingAttach = null;
   const playlist = job.playlist;
   if (!playlist) {
     clearPlayActivity();
@@ -2833,6 +2849,7 @@ async function poll(token: number, jobId: string): Promise<void> {
 let dockOpener: HTMLElement | null = null;
 
 export function play(target: PlayTarget): void {
+  void loadHls();
   const active = document.activeElement;
   if (active instanceof HTMLElement && !el("dock").contains(active) && active !== document.body) dockOpener = active;
   // A fresh start with nothing focused must not hand focus to a control from an earlier play.

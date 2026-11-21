@@ -18,6 +18,8 @@ import {
   type HlsInstance,
   attachHls,
   dropFocusAfterClick,
+  hlsReady,
+  loadHls,
   onScrubRelease,
   onVideoClick,
   paintBuffered,
@@ -688,6 +690,7 @@ function originFrom(job: PlayJob): number {
 
 /** Hide a track before dropping it; Chrome can otherwise leave its last cue drawn on the picture. */
 function destroyHls(): void {
+  pendingAttach = null;
   if (hls) hls.destroy();
   hls = null;
   attached = false;
@@ -1489,7 +1492,20 @@ function awaitSubtitles(job: PlayJob): void {
   })();
 }
 
+/** A job waiting for hls.js to load before it attaches. */
+let pendingAttach: PlayJob | null = null;
+
 function attachPlayback(job: PlayJob): void {
+  if (!hlsReady()) {
+    // hls.js loads on the first play; attach once it is here, unless a newer
+    // attach or a stop came first.
+    pendingAttach = job;
+    void loadHls().then(() => {
+      if (pendingAttach === job) attachPlayback(job);
+    });
+    return;
+  }
+  pendingAttach = null;
   const playlist = job.playlist;
   const media = nodes?.video;
   if (!playlist || !media || !nodes) {
