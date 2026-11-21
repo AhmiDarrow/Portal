@@ -572,6 +572,8 @@ async fn status(State(state): State<AppState>) -> Json<Status> {
 }
 
 async fn engine_restart(State(state): State<AppState>) -> Result<Json<Status>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     state
         .0
         .supervisor
@@ -842,6 +844,8 @@ async fn browse_path(
     headers: HeaderMap,
     Query(query): Query<PathQuery>,
 ) -> Result<Json<BrowsePage>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     if query.path.trim().is_empty() {
         return Err(fail(StatusCode::BAD_REQUEST, "Missing a folder."));
     }
@@ -864,6 +868,8 @@ async fn search_path(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<BrowsePage>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     let root = {
         let store = lock_store(&state);
         store.source().path
@@ -945,6 +951,8 @@ async fn settings_form(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<SettingsDoc>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     state.0.settings.form(&id).map(Json).map_err(from_engine)
 }
 
@@ -953,6 +961,8 @@ async fn settings_write(
     UrlPath((id, setting_id)): UrlPath<(String, String)>,
     Json(body): Json<SettingWrite>,
 ) -> Result<Json<OkBody>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     state
         .0
         .settings
@@ -965,6 +975,8 @@ async fn settings_action(
     State(state): State<AppState>,
     UrlPath((id, setting_id)): UrlPath<(String, String)>,
 ) -> Result<Json<ActionBody>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     let builtin = state
         .0
         .settings
@@ -1023,6 +1035,8 @@ async fn run_plugin(
     State(state): State<AppState>,
     Json(body): Json<RunBody>,
 ) -> Result<Json<ActionBody>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     let file = body.file.trim();
     if file.len() > 2048 || !plugin_link(file) || play_refusal(file, "").is_some() {
         return Err(fail(
@@ -1510,6 +1524,8 @@ async fn prompt_post(
     State(state): State<AppState>,
     Json(answer): Json<PromptAnswer>,
 ) -> Result<Json<OkBody>, ApiError> {
+    // Kodi is the user's now; a background resolve stops. The open dialog is the one being answered, so it is left alone.
+    let _user = early::user_action(&state, false).await;
     state.0.supervisor.ensure().await.map_err(from_engine)?;
     let chosen = chosen_row(&state, &answer).await;
     let showing = progress_cancel(&state, &answer).await;
@@ -1587,10 +1603,13 @@ async fn play_start(
 /// one already resolving for exactly this request. Also used when a device
 /// cast moves on to the next episode by itself.
 async fn start_play_job(state: &AppState, request: PlayRequest) -> Result<String, ApiError> {
-    if let Some(id) = early::claim(state, &request) {
+    if let Some(id) = early::claim(state, &request).await {
         return Ok(id);
     }
-    begin_play_job(state, request).await
+    let _user = early::user_action(state, true).await;
+    let id = begin_play_job(state, request).await?;
+    early::user_job(&id);
+    Ok(id)
 }
 
 /// `POST /api/play/{id}/early`: job `id` is near its end and the body is the
@@ -1830,6 +1849,8 @@ async fn play_quality(
     UrlPath(id): UrlPath<String>,
     Json(body): Json<QualityBody>,
 ) -> Result<Json<PlayJob>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     let job = state
         .0
         .player
@@ -1850,6 +1871,8 @@ async fn play_audio(
     UrlPath(id): UrlPath<String>,
     Json(body): Json<AudioBody>,
 ) -> Result<Json<PlayJob>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     let job = state
         .0
         .player
@@ -2170,6 +2193,8 @@ async fn addon_update(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<InstallResult>, ApiError> {
+    // Kodi is the user's now; a background resolve stops.
+    let _user = early::user_action(&state, true).await;
     let outcome = state.0.addons.update(&id).await.map_err(from_engine)?;
     Ok(Json(finish_install(&state, outcome).await))
 }

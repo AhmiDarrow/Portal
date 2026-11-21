@@ -8,7 +8,14 @@
 //! request then asks it as before), when autoplay is turned off, when the
 //! playing job goes, when nobody has asked for it lately (a seek back, a
 //! pause), or when another play request comes.
+//!
+//! Kodi has one dialog for everyone, so a background resolve yields to the
+//! user: none starts while a user-started play is resolving, a user request
+//! that drives Kodi is in flight, or any dialog is open; and every one stops
+//! the moment such a request begins. It only ever cancels a dialog it is
+//! sure is its own.
 
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -36,6 +43,76 @@ struct Early {
 }
 
 static EARLY: Mutex<Vec<Early>> = Mutex::new(Vec::new());
+/// User requests that drive Kodi (browse, search, settings, a prompt
+/// answer, a play starting) in flight.
+static USER_ACTIVE: AtomicUsize = AtomicUsize::new(0);
+/// Bumped as each begins: a background resolve that saw another value yields.
+static USER_GEN: AtomicU64 = AtomicU64::new(0);
+/// User-started play jobs; busy while they resolve.
+static USER_JOBS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Held for the length of a user request that drives Kodi.
+pub(crate) struct UserAction;
+
+impl Drop for UserAction {
+    fn drop(&mut self) {
+        USER_ACTIVE.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn begin_user() -> UserAction {
+    USER_ACTIVE.fetch_add(1, Ordering::SeqCst);
+    USER_GEN.fetch_add(1, Ordering::SeqCst);
+    UserAction
+}
+
+/// Every background entry, removed; their jobs are for the caller to stop.
+fn drain() -> Vec<Option<String>> {
+    std::mem::take(&mut *lock())
+        .into_iter()
+        .map(|early| early.job_id)
+        .collect()
+}
+
+/// A user request that drives Kodi begins: every background resolve stops
+/// now, and none starts until it ends. With `dialogs`, a dialog the stopped
+/// resolve left open is closed before the request goes on; a prompt answer
+/// passes false, since the open dialog is the one the user is answering.
+pub(crate) async fn user_action(state: &AppState, dialogs: bool) -> UserAction {
+    let action = begin_user();
+    for job in drain().into_iter().flatten() {
+        let begun = Instant::now();
+        release(state, &job, dialogs).await;
+        tracing::info!(job = %job, took_ms = begun.elapsed().as_millis() as u64, "Early next episode dropped: the user is using Kodi");
+    }
+    action
+}
+
+/// A play the user (or the cast's own autoplay) started.
+pub(crate) fn user_job(id: &str) {
+    USER_JOBS
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .push(id.to_string());
+}
+
+/// Whether a user-started play is still resolving; finished ones are forgotten.
+fn user_jobs_busy(state_of: impl Fn(&str) -> Option<JobState>) -> bool {
+    let mut jobs = USER_JOBS.lock().unwrap_or_else(|err| err.into_inner());
+    jobs.retain(|id| matches!(state_of(id), Some(JobState::Working | JobState::Prompt)));
+    !jobs.is_empty()
+}
+
+/// Nothing of the user's is using Kodi, so a background resolve may run.
+async fn user_idle(state: &AppState) -> bool {
+    if USER_ACTIVE.load(Ordering::SeqCst) > 0
+        || user_jobs_busy(|id| state.0.player.job(id).map(|job| job.state))
+    {
+        return false;
+    }
+    // Any dialog at all, or one that cannot be read, may be the user's.
+    matches!(state.0.prompts.read().await, Ok(None))
+}
 
 fn lock() -> std::sync::MutexGuard<'static, Vec<Early>> {
     EARLY.lock().unwrap_or_else(|err| err.into_inner())
@@ -45,12 +122,53 @@ fn key(request: &PlayRequest) -> serde_json::Value {
     serde_json::to_value(request).unwrap_or_default()
 }
 
-fn stop_later(state: &AppState, job_id: Option<String>) {
+/// No user request began since `gen` or is in flight, and no user play is
+/// resolving: a dialog open now came from the background resolve.
+fn still_ours(state: &AppState, gen: u64) -> bool {
+    USER_GEN.load(Ordering::SeqCst) == gen
+        && USER_ACTIVE.load(Ordering::SeqCst) == 0
+        && !user_jobs_busy(|id| state.0.player.job(id).map(|job| job.state))
+}
+
+/// Stops a background job. The add-on goes on inside Kodi after its job
+/// stops, so with `dialogs` a dialog it has open is closed too, leaving
+/// nothing of a background resolve on screen.
+async fn release(state: &AppState, job_id: &str, dialogs: bool) {
+    let resolving = state
+        .0
+        .player
+        .job(job_id)
+        .is_some_and(|job| matches!(job.state, JobState::Working | JobState::Prompt));
+    let _ = state.0.player.stop(job_id).await;
+    if !(dialogs && resolving) {
+        return;
+    }
+    // The add-on can be between two dialogs as its job stops, so it gets a
+    // second look; a short one, since a user request may be waiting on this.
+    for look in 0..2 {
+        if look > 0 {
+            tokio::time::sleep(DIALOG_RELOOK).await;
+        }
+        if let Ok(Some(prompt)) = state.0.prompts.read().await {
+            if prompt.cancellable {
+                let answer = PromptAnswer {
+                    id: prompt.id,
+                    action: PromptAction::Cancel,
+                    text: None,
+                    index: None,
+                };
+                let _ = state.0.prompts.answer(&answer).await;
+            }
+        }
+    }
+}
+
+const DIALOG_RELOOK: Duration = Duration::from_millis(400);
+
+fn stop_later(state: &AppState, job_id: Option<String>, dialogs: bool) {
     if let Some(job_id) = job_id {
         let state = state.clone();
-        tokio::spawn(async move {
-            let _ = state.0.player.stop(&job_id).await;
-        });
+        tokio::spawn(async move { release(&state, &job_id, dialogs).await });
     }
 }
 
@@ -69,7 +187,11 @@ pub(crate) fn want(state: &AppState, for_job: &str, request: PlayRequest) {
         }
         // Another next (a quality change, a next season found late).
         let old = list.remove(at);
-        stop_later(state, old.job_id);
+        stop_later(
+            state,
+            old.job_id,
+            still_ours(state, USER_GEN.load(Ordering::SeqCst)),
+        );
     }
     list.push(Early {
         for_job: for_job.to_string(),
@@ -84,7 +206,7 @@ pub(crate) fn want(state: &AppState, for_job: &str, request: PlayRequest) {
 
 /// The early job for exactly this request, if there is a usable one. Every
 /// other early job is dropped, so it does not hold Kodi from this request.
-pub(crate) fn claim(state: &AppState, request: &PlayRequest) -> Option<String> {
+pub(crate) async fn claim(state: &AppState, request: &PlayRequest) -> Option<String> {
     let wanted = key(request);
     let taken = std::mem::take(&mut *lock());
     let mut found = None;
@@ -99,7 +221,10 @@ pub(crate) fn claim(state: &AppState, request: &PlayRequest) -> Option<String> {
                 continue;
             }
         }
-        stop_later(state, early.job_id);
+        // The user's play has not touched Kodi yet: any dialog is the background's.
+        if let Some(job) = early.job_id {
+            release(state, &job, true).await;
+        }
     }
     if let Some(id) = &found {
         tracing::info!(job = %id, "Playing the next episode resolved early");
@@ -108,7 +233,7 @@ pub(crate) fn claim(state: &AppState, request: &PlayRequest) -> Option<String> {
 }
 
 /// Removes this early entry (if it is still the same one) and stops its job.
-fn cancel(state: &AppState, for_job: &str, wanted: &serde_json::Value, why: &str) {
+fn cancel(state: &AppState, for_job: &str, wanted: &serde_json::Value, why: &str, dialogs: bool) {
     let mut list = lock();
     let Some(at) = list
         .iter()
@@ -119,11 +244,28 @@ fn cancel(state: &AppState, for_job: &str, wanted: &serde_json::Value, why: &str
     let old = list.remove(at);
     drop(list);
     tracing::info!(job = ?old.job_id, "Early next episode dropped: {why}");
-    stop_later(state, old.job_id);
+    stop_later(state, old.job_id, dialogs);
 }
 
 async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: serde_json::Value) {
+    let gen = USER_GEN.load(Ordering::SeqCst);
+    if !user_idle(&state).await {
+        // Asked again in a few seconds; it starts once the user is done.
+        return cancel(&state, &for_job, &wanted, "the user is using Kodi", false);
+    }
     let started = crate::begin_play_job(&state, request).await;
+    if USER_GEN.load(Ordering::SeqCst) != gen {
+        if let Ok(id) = &started {
+            stop_later(&state, Some(id.clone()), false);
+        }
+        return cancel(
+            &state,
+            &for_job,
+            &wanted,
+            "the user began using Kodi",
+            false,
+        );
+    }
     let job_id = {
         let mut list = lock();
         let entry = list
@@ -137,7 +279,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
             (None, Ok(id)) => {
                 // Claimed too soon or dropped while starting.
                 drop(list);
-                stop_later(&state, Some(id));
+                stop_later(&state, Some(id), false);
                 return;
             }
             (entry, Err(_)) => {
@@ -163,20 +305,53 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
                 None => return, // claimed or dropped
             }
         };
+        if USER_GEN.load(Ordering::SeqCst) != gen {
+            return cancel(
+                &state,
+                &for_job,
+                &wanted,
+                "the user began using Kodi",
+                false,
+            );
+        }
         if !crate::prefs::current(&state).autoplay {
-            return cancel(&state, &for_job, &wanted, "autoplay is off");
+            return cancel(
+                &state,
+                &for_job,
+                &wanted,
+                "autoplay is off",
+                still_ours(&state, gen),
+            );
         }
         if asked.elapsed() > UNASKED {
-            return cancel(&state, &for_job, &wanted, "no longer near the end");
+            return cancel(
+                &state,
+                &for_job,
+                &wanted,
+                "no longer near the end",
+                still_ours(&state, gen),
+            );
         }
         if state.0.player.job(&for_job).is_none() {
             let since = *orphan_since.get_or_insert_with(Instant::now);
             if since.elapsed() > ORPHAN {
-                return cancel(&state, &for_job, &wanted, "the playing job ended");
+                return cancel(
+                    &state,
+                    &for_job,
+                    &wanted,
+                    "the playing job ended",
+                    still_ours(&state, gen),
+                );
             }
         }
         let Some(job) = state.0.player.job(&job_id) else {
-            return cancel(&state, &for_job, &wanted, "it went away");
+            return cancel(
+                &state,
+                &for_job,
+                &wanted,
+                "it went away",
+                still_ours(&state, gen),
+            );
         };
         if job.state != JobState::Working {
             continue;
@@ -190,6 +365,20 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
         if prompt.kind == PromptKind::Progress {
             continue;
         }
+        // Only a dialog that can be nobody else's is cancelled: no user
+        // request began or is in flight, no user play is resolving, and the
+        // same dialog is still the one open.
+        let ours = still_ours(&state, gen)
+            && matches!(state.0.prompts.read().await, Ok(Some(open)) if open.id == prompt.id);
+        if !ours {
+            return cancel(
+                &state,
+                &for_job,
+                &wanted,
+                "a dialog that may be the user's is open",
+                false,
+            );
+        }
         {
             let mut list = lock();
             if let Some(early) = list
@@ -201,16 +390,7 @@ async fn run(state: AppState, for_job: String, request: PlayRequest, wanted: ser
             }
         }
         tracing::info!(job = %job_id, "Early next episode dropped: the add-on asked a question");
-        let _ = state.0.player.stop(&job_id).await;
-        if prompt.cancellable {
-            let answer = PromptAnswer {
-                id: prompt.id,
-                action: PromptAction::Cancel,
-                text: None,
-                index: None,
-            };
-            let _ = state.0.prompts.answer(&answer).await;
-        }
+        release(&state, &job_id, still_ours(&state, gen)).await;
         return;
     }
 }
@@ -230,5 +410,44 @@ mod tests {
         assert_eq!(key(&request), key(&other));
         other.resume_seconds = Some(120.0);
         assert_ne!(key(&request), key(&other));
+    }
+
+    fn entry(job: &str) -> Early {
+        Early {
+            for_job: "playing".into(),
+            request: serde_json::Value::Null,
+            job_id: Some(job.into()),
+            asked: Instant::now(),
+            declined: false,
+        }
+    }
+
+    // One test: the guard is process-wide state.
+    #[test]
+    fn background_resolves_yield_to_the_user_in_either_order() {
+        // The user first: a request in flight, or a user play still resolving,
+        // keeps a background resolve from starting.
+        let action = begin_user();
+        assert!(USER_ACTIVE.load(Ordering::SeqCst) > 0);
+        drop(action);
+        assert_eq!(USER_ACTIVE.load(Ordering::SeqCst), 0);
+        user_job("user-play");
+        assert!(user_jobs_busy(|_| Some(JobState::Working)));
+        assert!(user_jobs_busy(|_| Some(JobState::Prompt)));
+        assert!(!user_jobs_busy(|_| Some(JobState::Ready)));
+        assert!(
+            !user_jobs_busy(|_| Some(JobState::Working)),
+            "a finished user play is forgotten"
+        );
+
+        // The background first: a user request stops it at once and tells a
+        // running one (by the generation) to yield, never touching the user's.
+        lock().push(entry("background"));
+        let gen = USER_GEN.load(Ordering::SeqCst);
+        let action = begin_user();
+        assert_eq!(drain(), vec![Some("background".to_string())]);
+        assert!(lock().is_empty());
+        assert_ne!(USER_GEN.load(Ordering::SeqCst), gen);
+        drop(action);
     }
 }
