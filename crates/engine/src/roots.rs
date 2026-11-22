@@ -6,7 +6,6 @@
 
 /// `https://host[:port]/path?query` as host, port and the path with its
 /// query. None for anything else, or for an address with a login in it.
-#[cfg_attr(not(windows), allow(dead_code))]
 pub fn https_parts(url: &str) -> Option<(String, u16, String)> {
     let rest = url
         .get(..8)
@@ -48,7 +47,7 @@ pub fn https_parts(url: &str) -> Option<(String, u16, String)> {
 /// Asks Windows to trust the root certificates of `url`'s host and of every
 /// host it redirects to, fetching any that are missing. True when they are
 /// all trusted afterwards. A HEAD request: no body is downloaded.
-#[cfg(all(windows, not(test)))]
+#[cfg(not(test))]
 pub fn fetch_root(url: &str) -> bool {
     use windows_sys::Win32::Networking::WinHttp::{
         WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest,
@@ -94,15 +93,6 @@ pub fn fetch_root(url: &str) -> bool {
         WinHttpCloseHandle(session);
         trusted
     }
-}
-
-/// Linux has nothing to fetch: ffmpeg checks certificates against the
-/// system's CA store (`/etc/ssl/certs`), which the distribution keeps whole
-/// and up to date, with no roots left to download on first use. A site it
-/// refuses stays refused, so there is no reason to try again.
-#[cfg(all(target_os = "linux", not(test)))]
-pub fn fetch_root(_url: &str) -> bool {
-    false
 }
 
 /// Tests never reach the network.

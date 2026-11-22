@@ -14,6 +14,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use portal_api::{NextItem, PlayJob, PlayKind, PlayRequest, ProgressReport, Quality, TitleKind};
+use serde::Serialize;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -138,15 +139,31 @@ impl Ending {
     }
 }
 
-pub(crate) use portal_api::CastDeviceState as DeviceState;
+/// What the dashboard shows for a device cast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum DeviceState {
+    Starting,
+    Playing,
+    Paused,
+    Buffering,
+    Idle,
+    /// Starting the next episode.
+    Next,
+    Ended,
+    Stopped,
+    Failed,
+}
 
-pub(crate) fn state_from_status(status: &DeviceStatus) -> DeviceState {
-    match status.state.as_str() {
-        "PLAYING" => DeviceState::Playing,
-        "PAUSED" => DeviceState::Paused,
-        "BUFFERING" => DeviceState::Buffering,
-        "IDLE" => DeviceState::Idle,
-        _ => DeviceState::Starting,
+impl DeviceState {
+    pub(crate) fn from_status(status: &DeviceStatus) -> Self {
+        match status.state.as_str() {
+            "PLAYING" => Self::Playing,
+            "PAUSED" => Self::Paused,
+            "BUFFERING" => Self::Buffering,
+            "IDLE" => Self::Idle,
+            _ => Self::Starting,
+        }
     }
 }
 
@@ -607,7 +624,7 @@ async fn observe<B: Backend>(
                     backend.publish(
                         gen,
                         Update::Status {
-                            state: state_from_status(&status),
+                            state: DeviceState::from_status(&status),
                             position,
                             duration,
                             volume: status.volume,

@@ -97,7 +97,7 @@ fn plugin_urls_come_out_of_addon_actions() {
 fn a_foreign_restart_is_a_conflict() {
     let (code, body) = from_engine(EngineError::ForeignRestart);
     assert_eq!(code, StatusCode::CONFLICT);
-    let text = body.0.detail.as_str();
+    let text = body.0["detail"].as_str().unwrap();
     assert!(text.contains("already running"));
     assert!(!text.to_ascii_lowercase().contains("password"));
 }
@@ -106,7 +106,7 @@ fn a_foreign_restart_is_a_conflict() {
 fn not_found_uses_a_public_sentence() {
     let (code, body) = from_engine(EngineError::NotFound);
     assert_eq!(code, StatusCode::NOT_FOUND);
-    assert_eq!(body.0.detail, "That item is gone.");
+    assert_eq!(body.0["detail"], "That item is gone.");
 }
 
 #[test]
@@ -116,12 +116,12 @@ fn bad_request_keeps_the_engine_sentence() {
     ));
     assert_eq!(code, StatusCode::BAD_REQUEST);
     assert_eq!(
-        body.0.detail,
+        body.0["detail"],
         "That item is an add-on action, not a video."
     );
     let (code, body) = from_engine(EngineError::BadRequest("Enter a name.".into()));
     assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(body.0.detail, "Enter a name.");
+    assert_eq!(body.0["detail"], "Enter a name.");
 }
 
 #[test]
@@ -130,9 +130,9 @@ fn list_put_name_rejects_blank_and_keeps_omitted() {
     assert_eq!(list_put_name(Some("  Show  ")).unwrap(), "Show");
     let err = list_put_name(Some("   ")).unwrap_err();
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    assert_eq!(err.1 .0.detail, "Enter a name.");
+    assert_eq!(err.1 .0["detail"], "Enter a name.");
     let err = list_put_name(Some("")).unwrap_err();
-    assert_eq!(err.1 .0.detail, "Enter a name.");
+    assert_eq!(err.1 .0["detail"], "Enter a name.");
 }
 
 #[test]
@@ -338,37 +338,4 @@ fn a_settings_window_kodi_opened_names_its_add_on() {
     assert_eq!(plugin_addon("plugin://"), None);
     assert_eq!(plugin_addon("special://home"), None);
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[tokio::test]
-async fn the_next_page_is_served_beside_the_old_one() {
-    let dir = std::env::temp_dir().join(format!("portal-next-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("index.html"), "<p>next</p>").unwrap();
-    std::fs::write(dir.join("app_bg.wasm"), b"\0asm\x01\0\0\0").unwrap();
-    let old = axum::Router::new().route("/", get(|| async { "old" }));
-    let app = serve_next(old, &dir);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
-    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    let get = |path: &str| client.get(format!("{base}{path}")).send();
-    assert_eq!(get("/").await.unwrap().text().await.unwrap(), "old");
-    assert_eq!(get("/next/").await.unwrap().text().await.unwrap(), "<p>next</p>");
-    let moved = get("/next").await.unwrap();
-    assert_eq!(moved.status(), StatusCode::PERMANENT_REDIRECT);
-    assert_eq!(moved.headers()[header::LOCATION], "/next/");
-    let wasm = get("/next/app_bg.wasm").await.unwrap();
-    assert_eq!(wasm.headers()[header::CONTENT_TYPE], "application/wasm");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn wasm_is_compressed() {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/wasm"));
-    let none = axum::http::Extensions::new();
-    assert!(compressible(StatusCode::OK, axum::http::Version::HTTP_11, &headers, &none));
-    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("video/mp2t"));
-    assert!(!compressible(StatusCode::OK, axum::http::Version::HTTP_11, &headers, &none));
 }

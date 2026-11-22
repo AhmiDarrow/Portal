@@ -24,9 +24,7 @@ mod encoder;
 pub use encoder::Encoder;
 pub use cast_stream::{CAST_INIT, CAST_PLAYLIST};
 
-#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-#[cfg(windows)]
 const BELOW_NORMAL: u32 = 0x00004000;
 const VIRTUAL_SCHEMES: &[&str] = &[
     "plugin", "special", "smb", "nfs", "ftp", "ftps", "sftp", "dav", "davs", "zip", "rar", "apk",
@@ -1307,19 +1305,6 @@ fn room_to_encode(dir: &Path) -> Result<(), EngineError> {
     }
 }
 
-#[cfg(target_os = "linux")]
-#[allow(clippy::useless_conversion)] // statvfs field types differ between targets
-fn free_bytes(path: &Path) -> Option<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-    let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
-    // SAFETY: a NUL-ended path and an out value that both outlive the call.
-    let ok = unsafe { libc::statvfs(path.as_ptr(), &mut stats) } == 0;
-    // Room this user may use, as GetDiskFreeSpaceEx reports it.
-    ok.then(|| u64::from(stats.f_bavail).saturating_mul(u64::from(stats.f_frsize)))
-}
-
-#[cfg(windows)]
 fn free_bytes(path: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
@@ -3240,7 +3225,7 @@ fn video_args_cut(
         filters.push("tonemap=hable:desat=0".into());
         filters.push("zscale=t=bt709:m=bt709:r=tv".into());
     }
-    filters.push(encoder::picture_tail(encoder).into());
+    filters.push("format=yuv420p".into());
     let mut args = vec!["-vf".into(), filters.join(",")];
     // A steady quality keeps calm scenes small; the ceiling caps the busy
     // ones, over a two-second buffer.
@@ -3355,11 +3340,8 @@ fn spawn_ffmpeg(ffmpeg: &Path, args: &[String]) -> std::io::Result<Child> {
 
 /// `folder` is where ffmpeg runs, for a file it names without a folder.
 fn spawn_ffmpeg_in(ffmpeg: &Path, args: &[String], folder: Option<&Path>) -> std::io::Result<Child> {
-    #[cfg(windows)]
     use std::os::windows::process::CommandExt;
     let mut command = Command::new(ffmpeg);
-    #[cfg(target_os = "linux")]
-    crate::child::contain(&mut command, false);
     if let Some(folder) = folder {
         command.current_dir(folder);
     }
@@ -3369,10 +3351,9 @@ fn spawn_ffmpeg_in(ffmpeg: &Path, args: &[String], folder: Option<&Path>) -> std
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-    command.spawn()
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
 }
 
 fn drain_stderr(child: &mut Child) -> Arc<Mutex<String>> {
@@ -3763,19 +3744,15 @@ fn capture_until(
     limit: Duration,
     cancel: &dyn Fn() -> bool,
 ) -> Result<Captured, CaptureError> {
-    #[cfg(windows)]
     use std::os::windows::process::CommandExt;
-    let mut command = Command::new(bin);
-    command
+    let mut child = Command::new(bin)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL);
-    #[cfg(target_os = "linux")]
-    crate::child::contain(&mut command, true);
-    let mut child = command.spawn().map_err(|_| CaptureError::Io)?;
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL)
+        .spawn()
+        .map_err(|_| CaptureError::Io)?;
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
     let out_handle = thread::spawn(move || read_all(stdout.take()));
@@ -3830,7 +3807,6 @@ async fn discard(child: Arc<Mutex<Child>>, dir: PathBuf) {
     .await;
 }
 
-#[cfg(windows)]
 #[link(name = "ntdll")]
 extern "system" {
     fn NtSuspendProcess(process: *mut std::ffi::c_void) -> i32;
@@ -3845,6 +3821,7 @@ const BROWSER_QUIET: Duration = Duration::from_secs(20);
 /// What is already made stays, and the encode runs on from there later.
 /// A browser still fetching the stream keeps its encode.
 fn park(slot: &mut JobSlot) {
+    use std::os::windows::io::AsRawHandle;
     if slot.parked {
         return;
     }
@@ -3861,47 +3838,26 @@ fn park(slot: &mut JobSlot) {
     if !matches!(child.try_wait(), Ok(None)) {
         return;
     }
-    let held = hold_process(&child, true);
+    // SAFETY: the handle belongs to a child this process still holds open.
+    let held = unsafe { NtSuspendProcess(child.as_raw_handle() as _) } >= 0;
     drop(child);
     slot.parked = held;
 }
 
 /// Lets a parked ffmpeg run on.
 fn unpark(slot: &mut JobSlot) {
+    use std::os::windows::io::AsRawHandle;
     if !slot.parked {
         return;
     }
     slot.parked = false;
     if let Some(ffmpeg) = &slot.ffmpeg {
         let child = lock_child(ffmpeg);
-        hold_process(&child, false);
-    }
-}
-
-/// Suspends (`hold`) or resumes a child this process still holds open.
-#[cfg(windows)]
-fn hold_process(child: &Child, hold: bool) -> bool {
-    use std::os::windows::io::AsRawHandle;
-    // SAFETY: the handle belongs to a child this process still holds open.
-    unsafe {
-        if hold {
-            NtSuspendProcess(child.as_raw_handle() as _) >= 0
-        } else {
+        // SAFETY: as in `park`.
+        unsafe {
             NtResumeProcess(child.as_raw_handle() as _);
-            true
         }
     }
-}
-
-/// SIGSTOP and SIGCONT. The child is not yet reaped, so its id is still its own.
-#[cfg(target_os = "linux")]
-fn hold_process(child: &Child, hold: bool) -> bool {
-    let Ok(pid) = libc::pid_t::try_from(child.id()) else {
-        return false;
-    };
-    let signal = if hold { libc::SIGSTOP } else { libc::SIGCONT };
-    // SAFETY: a plain signal to our own unreaped child.
-    unsafe { libc::kill(pid, signal) == 0 }
 }
 
 /// ffmpeg starts no children, so ending the process itself is enough.

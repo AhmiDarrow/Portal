@@ -128,24 +128,10 @@ pub fn set_aside(path: &std::path::Path) {
     }
 }
 
-#[cfg(windows)]
 pub fn portal_dir() -> PathBuf {
     env_path("LOCALAPPDATA")
         .unwrap_or_else(std::env::temp_dir)
         .join("Portal")
-}
-
-/// `$XDG_DATA_HOME/portal`, else `~/.local/share/portal`.
-#[cfg(not(windows))]
-pub fn portal_dir() -> PathBuf {
-    data_home().unwrap_or_else(std::env::temp_dir).join("portal")
-}
-
-#[cfg(not(windows))]
-fn data_home() -> Option<PathBuf> {
-    env_path("XDG_DATA_HOME")
-        .filter(|dir| dir.is_absolute())
-        .or_else(|| Some(env_path("HOME")?.join(".local").join("share")))
 }
 
 pub fn web_dist() -> PathBuf {
@@ -161,24 +147,6 @@ pub fn web_dist() -> PathBuf {
         candidates,
         |dir| dir.join("index.html").is_file(),
         PathBuf::from("web/dist"),
-    )
-}
-
-/// The RemedyUI build of the dashboard, served at `/next/`: `PORTAL_WEB_NEXT_DIST`, else
-/// `web-next` beside the program, else what `tools/build-web-app.ps1` writes in a checkout.
-pub fn web_next_dist() -> PathBuf {
-    if let Some(dir) = env_path("PORTAL_WEB_NEXT_DIST") {
-        return dir;
-    }
-    let mut candidates = Vec::new();
-    if let Some(dir) = install_dir() {
-        candidates.push(dir.join("web-next"));
-    }
-    candidates.push(source_root().join("target").join("remedy").join("web").join("portal-web"));
-    first(
-        candidates,
-        |dir| dir.join("index.html").is_file(),
-        PathBuf::from("web-next"),
     )
 }
 
@@ -204,9 +172,7 @@ fn bundled_tool(env_key: &str, name: &str) -> PathBuf {
         return path;
     }
     if let Some(dir) = install_dir() {
-        let path = dir
-            .join("ffmpeg")
-            .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+        let path = dir.join("ffmpeg").join(format!("{name}.exe"));
         if path.is_file() {
             return path;
         }
@@ -245,22 +211,16 @@ pub fn cast_python() -> PathBuf {
         return path;
     }
     if let Some(dir) = install_dir() {
-        let python = if cfg!(windows) {
-            dir.join("python").join("python.exe")
-        } else {
-            dir.join("python").join("bin").join("python3")
-        };
+        let python = dir.join("python").join("python.exe");
         if python.is_file() {
             return python;
         }
     }
-    // Linux distributions name Python 3 `python3`; `python` may be missing or Python 2.
-    PathBuf::from(if cfg!(windows) { "python" } else { "python3" })
+    PathBuf::from("python")
 }
 
 /// `KODI_EXE`, then the folder Kodi's installer records under
 /// `HKCU\Software\Kodi`, then the Program Files folders.
-#[cfg(windows)]
 pub fn kodi_exe() -> PathBuf {
     if let Some(path) = env_path("KODI_EXE") {
         return path;
@@ -316,71 +276,9 @@ fn kodi_registry_dir() -> Option<PathBuf> {
     None
 }
 
-/// Kodi's profile: `%APPDATA%\Kodi`.
-#[cfg(windows)]
-pub fn kodi_profile() -> PathBuf {
-    std::env::var_os("APPDATA")
-        .map(|dir| PathBuf::from(dir).join("Kodi"))
-        .unwrap_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Roaming\Kodi"))
-}
-
-/// The add-ons that ship with Kodi: `addons` beside `kodi.exe`.
-#[cfg(windows)]
-pub fn kodi_system_addons(kodi_exe: &Path) -> PathBuf {
-    kodi_exe
-        .parent()
-        .map(|dir| dir.join("addons"))
-        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files\Kodi\addons"))
-}
-
-/// `KODI_EXE`, then the Kodi program the distribution installs
-/// (`/usr/lib/<triplet>/kodi/kodi.bin` and the like), then the `kodi`
-/// launcher script, then `kodi` from PATH. The program itself comes first so
-/// the process Portal starts is Kodi; for a script Portal finds the Kodi it starts.
 #[cfg(not(windows))]
-pub fn kodi_exe() -> PathBuf {
-    if let Some(path) = env_path("KODI_EXE") {
-        return path;
-    }
-    let mut candidates = Vec::new();
-    for lib in ["/usr/lib", "/usr/lib64", "/usr/local/lib"] {
-        let lib = Path::new(lib);
-        candidates.push(lib.join("kodi").join("kodi.bin"));
-        if let Ok(entries) = std::fs::read_dir(lib) {
-            let mut triplets: Vec<PathBuf> = entries
-                .flatten()
-                .map(|entry| entry.path().join("kodi").join("kodi.bin"))
-                .collect();
-            triplets.sort();
-            candidates.extend(triplets);
-        }
-    }
-    candidates.push(PathBuf::from("/usr/bin/kodi"));
-    candidates.push(PathBuf::from("/usr/local/bin/kodi"));
-    first(candidates, |path| path.is_file(), PathBuf::from("kodi"))
-}
-
-/// Kodi's profile: `KODI_PROFILE` when set (for a Kodi run with another home), else `~/.kodi`.
-#[cfg(not(windows))]
-pub fn kodi_profile() -> PathBuf {
-    env_path("KODI_PROFILE")
-        .or_else(|| Some(env_path("HOME")?.join(".kodi")))
-        .unwrap_or_else(|| std::env::temp_dir().join(".kodi"))
-}
-
-/// The add-ons that ship with Kodi: `KODI_HOME/addons` when set, else
-/// `share/kodi/addons` under the prefix Kodi is installed in, else `/usr`'s.
-#[cfg(not(windows))]
-pub fn kodi_system_addons(kodi_exe: &Path) -> PathBuf {
-    if let Some(home) = env_path("KODI_HOME") {
-        return home.join("addons");
-    }
-    let exe = std::fs::canonicalize(kodi_exe).unwrap_or_else(|_| kodi_exe.to_path_buf());
-    exe.ancestors()
-        .skip(1)
-        .map(|prefix| prefix.join("share").join("kodi").join("addons"))
-        .find(|dir| dir.is_dir())
-        .unwrap_or_else(|| PathBuf::from("/usr/share/kodi/addons"))
+fn kodi_registry_dir() -> Option<PathBuf> {
+    None
 }
 
 #[cfg(test)]

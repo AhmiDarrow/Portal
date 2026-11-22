@@ -892,17 +892,9 @@ fn a_login_never_becomes_a_header_that_follows_redirects() {
 
 #[test]
 fn ffmpeg_that_fails_before_the_end_marker_stopped_early() {
-    #[cfg(windows)]
-    let (failed, clean) = {
-        use std::os::windows::process::ExitStatusExt;
-        (ExitStatus::from_raw(1), ExitStatus::from_raw(0))
-    };
-    #[cfg(unix)]
-    let (failed, clean) = {
-        use std::os::unix::process::ExitStatusExt;
-        // A wait status: the exit code sits in the second byte.
-        (ExitStatus::from_raw(1 << 8), ExitStatus::from_raw(0))
-    };
+    use std::os::windows::process::ExitStatusExt;
+    let failed = ExitStatus::from_raw(1);
+    let clean = ExitStatus::from_raw(0);
     let open = "#EXTM3U\nindex0.ts\n";
     let done = "#EXTM3U\nindex0.ts\n#EXT-X-ENDLIST\n";
     assert!(stopped_early(failed, Some(open)));
@@ -919,9 +911,14 @@ fn ffmpeg_that_fails_before_the_end_marker_stopped_early() {
 
 #[test]
 fn a_ready_job_fails_when_ffmpeg_dies_mid_play() {
+    use std::os::windows::process::CommandExt;
     let root = test_root("died");
     fs::write(root.join("index.m3u8"), "#EXTM3U\nindex0.ts\n").unwrap();
-    let mut child = shell("exit 3");
+    let mut child = Command::new("cmd")
+        .args(["/C", "exit 3"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .unwrap();
     let _ = child.wait();
     let mut slot = test_slot("job", JobState::Ready);
     slot.ffmpeg = Some(Arc::new(Mutex::new(child)));
@@ -940,9 +937,18 @@ fn a_ready_job_fails_when_ffmpeg_dies_mid_play() {
 
 #[tokio::test]
 async fn a_slow_start_is_not_called_a_transcoding_failure() {
+    use std::os::windows::process::CommandExt;
     let root = test_root("slow");
     let playlist = root.join("index.m3u8");
-    let spawn = |script: &str| Arc::new(Mutex::new(shell(script)));
+    let spawn = |script: &str| {
+        Arc::new(Mutex::new(
+            Command::new("cmd")
+                .args(["/C", script])
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .unwrap(),
+        ))
+    };
     let reading = spawn("ping -n 6 127.0.0.1 >nul");
     let slow =
         wait_for_segment_within(&reading, &playlist, &|| false, Duration::from_millis(300)).await;
@@ -1422,29 +1428,14 @@ async fn a_lone_far_piece_leaves_the_running_encoder_alone() {
 }
 
 fn waiting_child() -> Arc<Mutex<Child>> {
-    Arc::new(Mutex::new(shell("ping -n 30 127.0.0.1 >nul")))
-}
-
-/// A hidden child running a shell line: `cmd /C` on Windows. On Linux
-/// `sh -c`, where a `ping -n <n>` wait becomes `sleep <n>`.
-fn shell(script: &str) -> Child {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
+    use std::os::windows::process::CommandExt;
+    Arc::new(Mutex::new(
         Command::new("cmd")
-            .args(["/C", script])
+            .args(["/C", "ping -n 30 127.0.0.1 >nul"])
             .creation_flags(CREATE_NO_WINDOW)
             .spawn()
-            .unwrap()
-    }
-    #[cfg(unix)]
-    {
-        let line = match script.strip_prefix("ping -n ") {
-            Some(rest) => format!("sleep {}", rest.split(' ').next().unwrap_or("1")),
-            None => script.to_string(),
-        };
-        Command::new("sh").args(["-c", &line]).spawn().unwrap()
-    }
+            .unwrap(),
+    ))
 }
 
 fn playlist_of(segments: u32) -> String {

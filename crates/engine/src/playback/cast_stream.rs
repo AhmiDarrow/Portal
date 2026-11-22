@@ -249,7 +249,7 @@ pub(super) fn cast_args(
     if padded {
         if let Some(at) = picture.iter().position(|arg| arg == "-vf") {
             if let Some(filters) = picture.get_mut(at + 1) {
-                encoder::add_filter(filters, "tpad=stop_mode=clone:stop=-1");
+                filters.push_str(",tpad=stop_mode=clone:stop=-1");
             }
         }
     }

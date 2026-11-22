@@ -69,7 +69,6 @@ Type: files; Name: "{autoprograms}\Stop {#AppName}.lnk"
 Type: files; Name: "{userstartup}\{#AppName}.lnk"
 ; The dashboard's file names change with every build, so old ones would pile up.
 Type: filesandordirs; Name: "{app}\web"
-Type: filesandordirs; Name: "{app}\web-next"
 
 [Registry]
 ; The same value the tray's "Start with Windows" item turns on and off. An

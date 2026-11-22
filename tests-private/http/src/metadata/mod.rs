@@ -69,7 +69,7 @@ async fn a_malformed_key_is_refused_before_any_request_and_null_clears() {
         .await
         .unwrap_err();
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    assert_eq!(err.1 .0.detail, KEY_REFUSED);
+    assert_eq!(err.1 .0["detail"], KEY_REFUSED);
 
     // A stored key reads back as `tmdb: true` and never as the key.
     settings::save(

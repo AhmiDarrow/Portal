@@ -32,11 +32,5 @@ tokio = { workspace = true, features = ["test-util"] }
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
 
-# Sealing settings secrets on Linux (subtitles/sealed.rs): ring is already in the
-# build through rustls; zbus reaches the Secret Service.
-[target.'cfg(target_os = "linux")'.dependencies]
-ring = "0.17"
-zbus = "5"
-
 [build-dependencies]
 embed-resource = "3"

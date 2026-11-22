@@ -154,11 +154,11 @@ fn session_set_requires_a_live_receiver_and_clear_empties_it() {
     assert_eq!(session.job_id, "job-1");
     assert_eq!(session.title.as_deref(), Some("Pilot"));
     assert!(session.replay.is_none());
-    let view = session_view(&session);
+    let view = SessionView::from_session(&session);
     let mut slot = Some(session);
     clear_session(&mut slot);
     assert!(slot.is_none());
-    let empty = SessionView::default();
+    let empty = SessionView::empty();
     let value = serde_json::to_value(&empty).unwrap();
     assert!(value["receiver_id"].is_null());
     assert!(value["job_id"].is_null());
@@ -302,9 +302,9 @@ fn a_session_view_shows_a_lost_cast_only_without_a_live_one() {
         seen_ms: 1,
     }];
     let session = assign_session(&receivers, "tv", "job", None, None).unwrap();
-    let live = serde_json::to_value(session_view(&session)).unwrap();
+    let live = serde_json::to_value(SessionView::from_session(&session)).unwrap();
     assert!(live.get("lost").is_none());
-    let empty = serde_json::to_value(SessionView::default()).unwrap();
+    let empty = serde_json::to_value(SessionView::empty()).unwrap();
     assert!(empty.get("lost").is_none());
 }
 
@@ -604,7 +604,7 @@ fn a_device_stop_ends_the_watch_and_later_lines_are_ignored() {
     );
     assert_eq!(hub.device_view().job_id.as_deref(), Some("job-1"));
     assert_eq!(
-        serde_json::to_value(DeviceView::default()).unwrap()["active"],
+        serde_json::to_value(DeviceView::empty()).unwrap()["active"],
         false
     );
 }
@@ -1228,15 +1228,4 @@ async fn a_job_with_no_whole_title_stream_is_cast_as_a_file() {
     let (same, start) = cast_target(&player, url, None, 12.0).await.unwrap();
     assert_eq!((same.as_str(), start), (url, 12.0));
     let _ = std::fs::remove_dir_all(&root);
-}
-
-#[test]
-fn seek_answer_wait_has_a_default_and_a_setter() {
-    assert_eq!(SEEK_ANSWER_WAIT, Duration::from_secs(20));
-    set_seek_answer_wait(Duration::from_secs(90));
-    assert_eq!(seek_answer_wait(), Duration::from_secs(90));
-    // No cap: a long wait is kept as given.
-    set_seek_answer_wait(Duration::from_secs(3600));
-    assert_eq!(seek_answer_wait(), Duration::from_secs(3600));
-    set_seek_answer_wait(SEEK_ANSWER_WAIT);
 }

@@ -125,21 +125,6 @@ These environment variables are all optional.
 
 Portal starts Kodi only when no `kodi.exe` is running, and only one Portal can start it at a time. If Kodi is already running, Portal uses it. It never hides or quits a Kodi it didn't start.
 
-### Linux
-
-The service and the tray build and run on Linux too (`cargo run -p portal-http`; there is no installer yet, and **Install update** is Windows-only). What differs:
-
-| | Linux |
-| --- | --- |
-| Portal's data | `$XDG_DATA_HOME/portal`, else `~/.local/share/portal` (same files as above) |
-| Kodi | `KODI_EXE`, else the distribution's `kodi.bin` (`/usr/lib/<triplet>/kodi/`), else the `kodi` script. Its profile is `~/.kodi` (`KODI_PROFILE` to change), its own add-ons `share/kodi/addons` under its prefix (`KODI_HOME/addons` when set) |
-| Kodi's window | hidden and shown through X11; on a Wayland desktop Portal starts Kodi with `--windowing=x11` (XWayland) so it can. Kodi runs in a session of its own and outlives Portal, as on Windows |
-| Encoding | NVENC on an NVIDIA card (CUDA reads the picture), VA-API on an Intel or AMD card (the first `/dev/dri/renderD*`), else the processor; tried in that order, as on Windows |
-| Secret keys | sealed with a key kept in the Secret Service (GNOME Keyring, KWallet); without one, in `secret.key` in Portal's data folder, readable only by you (0600). The log says which |
-| ffmpeg and the cast helper | ended with Portal however it exits (a small guardian process kills their process group) |
-| Cast helper | `python3` from `PATH`, with `pip install -r tools/cast/requirements.txt` |
-| Certificates | the system's CA store; Windows' on-demand root fetch has no Linux counterpart |
-
 ## Development
 
 | Path | Contents |

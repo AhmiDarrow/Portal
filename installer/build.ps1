@@ -12,8 +12,7 @@
     Python   the embeddable runtime plus the cast helper's wheels, only when
              the "Cast to TVs" option is selected
 
-  Steps: build portal.exe, portal-launcher.exe, web\dist and the RemedyUI
-  dashboard (web-next, served at /next/); stage them;
+  Steps: build portal.exe, portal-launcher.exe and web\dist; stage them;
   resolve the downloads into target\installer\downloads.iss; compile
   installer\portal.iss with Inno Setup 6; write the installer's SHA-256 to
   Portal-Setup-<version>.exe.sha256 for Portal's updater.
@@ -103,8 +102,6 @@ if (-not $SkipBuild) {
   $web = Join-Path $Root 'web'
   Invoke-Checked npm @('ci', '--no-audit', '--no-fund') $web
   Invoke-Checked npm @('run', 'build') $web
-  # The RemedyUI dashboard, served at /next/ beside the page above.
-  Invoke-Checked pwsh @('-NoProfile', '-File', (Join-Path $Root 'tools\build-web-app.ps1'))
 }
 
 Step 'Staging Portal'
@@ -113,7 +110,6 @@ New-Item -ItemType Directory -Force $Stage, (Join-Path $Stage 'vendor'), (Join-P
 Copy-Item (Join-Path $Root 'target\release\portal.exe') $Stage
 Copy-Item (Join-Path $Root 'target\release\portal-launcher.exe') $Stage
 Copy-Item (Join-Path $Root 'web\dist') (Join-Path $Stage 'web') -Recurse
-Copy-Item (Join-Path $Root 'target\remedy\web\portal-web') (Join-Path $Stage 'web-next') -Recurse
 Copy-Item (Join-Path $Root 'web\vendor\hls.min.js') (Join-Path $Stage 'vendor')
 Copy-Item (Join-Path $Root 'web\vendor\hls.js.LICENSE.txt') (Join-Path $Stage 'vendor')
 # The dashboard's typefaces are built into web\dist; their licences go with them.
@@ -122,7 +118,7 @@ Copy-Item (Join-Path $Root 'tools\cast\cast_agent.py') (Join-Path $Stage 'cast')
 foreach ($doc in 'LICENSE', 'README.md') { Copy-Item (Join-Path $Root $doc) $Stage }
 # The licences of the Rust crates built into portal.exe and portal-launcher.exe.
 Invoke-Checked python @((Join-Path $Root 'tools\notices.py'), (Join-Path $Stage 'THIRD-PARTY-NOTICES.txt'))
-foreach ($required in 'portal.exe', 'portal-launcher.exe', 'web\index.html', 'web-next\index.html', 'vendor\hls.min.js', 'cast\cast_agent.py', 'THIRD-PARTY-NOTICES.txt') {
+foreach ($required in 'portal.exe', 'portal-launcher.exe', 'web\index.html', 'vendor\hls.min.js', 'cast\cast_agent.py', 'THIRD-PARTY-NOTICES.txt') {
   if (-not (Test-Path (Join-Path $Stage $required))) { throw "Staged install is missing $required" }
 }
 

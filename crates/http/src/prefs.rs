@@ -15,12 +15,83 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 use portal_api::Quality;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The largest body `PUT /api/prefs` reads.
 pub const BODY_LIMIT: usize = 2048;
 const LANGUAGE_LIMIT: usize = 16;
 
-pub use portal_api::{Prefs, PrefsBody, PrefsPut, SubtitleMode};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SubtitleMode {
+    #[default]
+    Off,
+    Auto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prefs {
+    #[serde(default)]
+    pub quality: Quality,
+    #[serde(default)]
+    pub subtitles: SubtitleMode,
+    /// The language of the last subtitle the user picked, e.g. "en" or "pt-BR".
+    #[serde(default)]
+    pub subtitle_language: Option<String>,
+    /// The language of the last audio track the user picked.
+    #[serde(default)]
+    pub audio_language: Option<String>,
+    #[serde(default = "autoplay_by_default")]
+    pub autoplay: bool,
+}
+
+fn autoplay_by_default() -> bool {
+    true
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self {
+            quality: Quality::Auto,
+            subtitles: SubtitleMode::Off,
+            subtitle_language: None,
+            audio_language: None,
+            autoplay: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PrefsBody {
+    #[serde(flatten)]
+    pub prefs: Prefs,
+    /// False until a choice has been saved; the page then moves its own over.
+    pub stored: bool,
+}
+
+/// A partial change. Fields left out stay as they are; unknown fields are ignored.
+#[derive(Debug, Default, Deserialize)]
+pub struct PrefsPut {
+    #[serde(default)]
+    quality: Option<String>,
+    #[serde(default)]
+    subtitles: Option<String>,
+    /// `null` forgets the language; a missing field keeps it.
+    #[serde(default, deserialize_with = "present")]
+    subtitle_language: Option<Option<String>>,
+    /// `null` forgets the language; a missing field keeps it.
+    #[serde(default, deserialize_with = "present")]
+    audio_language: Option<Option<String>>,
+    #[serde(default)]
+    autoplay: Option<bool>,
+}
+
+fn present<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum PutError {

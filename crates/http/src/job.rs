@@ -36,9 +36,5 @@ pub fn contain_children() {
     }
 }
 
-/// Linux: a guardian process kills every contained child when Portal ends;
-/// see `portal_engine::child`.
 #[cfg(not(windows))]
-pub fn contain_children() {
-    portal_engine::child::guard_children();
-}
+pub fn contain_children() {}

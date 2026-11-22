@@ -15,7 +15,6 @@ fn the_processor_keeps_its_settings() {
     assert!(after(&encode_args(Encoder::Cpu, None), "-maxrate").is_none());
 }
 
-#[cfg(windows)]
 #[test]
 fn each_card_gets_its_own_codec_and_a_ceiling() {
     for (card, codec) in [
@@ -48,48 +47,11 @@ fn each_card_gets_its_own_codec_and_a_ceiling() {
     assert!(after(&encode_args(Encoder::Intel, None), "-b:v").is_none());
 }
 
-#[cfg(windows)]
 #[test]
 fn the_card_reads_the_picture_only_when_it_also_encodes() {
     assert!(decode_args(Encoder::Cpu).is_empty());
     assert_eq!(decode_args(Encoder::Nvidia), vec!["-hwaccel", "d3d11va"]);
     assert_eq!(decode_args(Encoder::Amd), vec!["-hwaccel", "d3d11va"]);
-    assert_eq!(picture_tail(Encoder::Intel), "format=yuv420p");
-    let mut chain = "scale=-2:720,format=yuv420p".to_string();
-    add_filter(&mut chain, "tpad=stop_mode=clone:stop=-1");
-    assert_eq!(chain, "scale=-2:720,format=yuv420p,tpad=stop_mode=clone:stop=-1");
-}
-
-/// Linux: NVENC with CUDA reading, and VA-API for Intel and AMD cards, whose
-/// upload stays the last filter.
-#[cfg(target_os = "linux")]
-#[test]
-fn linux_cards_use_nvenc_and_vaapi() {
-    let nvidia = encode_args(Encoder::Nvidia, Some(8_000_000));
-    assert_eq!(after(&nvidia, "-c:v"), Some("h264_nvenc"));
-    assert_eq!(after(&nvidia, "-maxrate"), Some("8000000"));
-    assert_eq!(decode_args(Encoder::Nvidia), vec!["-hwaccel", "cuda"]);
-    for card in [Encoder::Intel, Encoder::Amd] {
-        let capped = encode_args(card, Some(10_000_000));
-        assert_eq!(after(&capped, "-c:v"), Some("h264_vaapi"));
-        assert_eq!(after(&capped, "-rc_mode"), Some("VBR"));
-        assert_eq!(after(&capped, "-b:v"), Some("7000000"));
-        assert_eq!(after(&capped, "-maxrate"), Some("10000000"));
-        assert_eq!(after(&capped, "-bufsize"), Some("20000000"));
-        let steady = encode_args(card, None);
-        assert_eq!(after(&steady, "-rc_mode"), Some("CQP"));
-        assert!(after(&steady, "-maxrate").is_none());
-        assert_eq!(decode_args(card).get(1).map(String::as_str), Some("vaapi"));
-        assert_eq!(picture_tail(card), "format=nv12,hwupload");
-    }
-    assert!(decode_args(Encoder::Cpu).is_empty());
-    assert_eq!(picture_tail(Encoder::Cpu), "format=yuv420p");
-    let mut chain = format!("scale=-2:720,{}", picture_tail(Encoder::Amd));
-    add_filter(&mut chain, "tpad=stop_mode=clone:stop=-1");
-    assert_eq!(chain, "scale=-2:720,tpad=stop_mode=clone:stop=-1,format=nv12,hwupload");
-    let mut plain = "scale=-2:720,format=yuv420p".to_string();
-    add_filter(&mut plain, "tpad=stop_mode=clone:stop=-1");
-    assert_eq!(plain, "scale=-2:720,format=yuv420p,tpad=stop_mode=clone:stop=-1");
 }
 
 #[test]

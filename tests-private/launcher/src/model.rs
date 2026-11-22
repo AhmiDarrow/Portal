@@ -231,7 +231,6 @@ fn a_frozen_portal_is_restarted_end_to_end() {
     // reach another test.
     std::env::set_var("PORTAL_PORT", port.to_string());
     std::env::set_var("LOCALAPPDATA", &scratch);
-    std::env::set_var("XDG_DATA_HOME", &scratch);
     std::env::set_var("APPDATA", &scratch);
     std::env::set_var("KODI_EXE", scratch.join("no-kodi.exe"));
     std::env::set_var("PORTAL_TEST_KODI_PORT", free().to_string());
@@ -585,4 +584,19 @@ fn a_failed_install_is_reported_once() {
         model.on_health(health, now).is_empty(),
         "same error, told once"
     );
+}
+
+#[test]
+fn wide_text_is_cut_to_fit() {
+    let mut buffer = [7u16; 6];
+    fill_wide(&mut buffer, "Portal");
+    assert_eq!(String::from_utf16_lossy(&buffer[..5]), "Porta");
+    assert_eq!(buffer[5], 0);
+    fill_wide(&mut buffer, "ab");
+    assert_eq!(&buffer[..3], &[b'a' as u16, b'b' as u16, 0]);
+    assert!(buffer[3..].iter().all(|unit| *unit == 0));
+    let mut pair = [0u16; 3];
+    fill_wide(&mut pair, "a😀");
+    assert_eq!(pair, [b'a' as u16, 0, 0]);
+    fill_wide(&mut [], "nothing");
 }

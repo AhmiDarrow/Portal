@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-pub const DEFAULT_PORT: u16 = 8490;
+const DEFAULT_PORT: u16 = 8490;
 const START_WAIT: Duration = Duration::from_secs(45);
 const STOP_WAIT: Duration = Duration::from_secs(20);
 const POLL: Duration = Duration::from_millis(200);
@@ -395,6 +395,17 @@ pub fn ensure_running(port: u16) -> Result<(), String> {
     }
 }
 
+/// The service another launcher is starting: waits for it to answer, and
+/// never starts one of its own.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn await_running(port: u16) -> Result<(), String> {
+    match probe(port) {
+        Probe::Portal => Ok(()),
+        Probe::Other => Err(port_taken_message(port)),
+        Probe::Silent | Probe::Nothing => wait_for_service(port, None),
+    }
+}
+
 /// Stops the Portal on the port and waits until its process has exited, so
 /// its files can be replaced. `Ok(false)` means no Portal was running.
 pub fn shutdown(port: u16) -> Result<bool, String> {
@@ -446,6 +457,7 @@ pub fn shutdown(port: u16) -> Result<bool, String> {
 
 /// True when process `pid` runs from the folder this launcher is in.
 /// False when that cannot be read.
+#[cfg(windows)]
 pub fn in_our_folder(pid: u32) -> bool {
     let ours = std::env::current_exe()
         .ok()
@@ -455,6 +467,11 @@ pub fn in_our_folder(pid: u32) -> bool {
         (Some(ours), Some(theirs)) => same_path(&ours, &theirs),
         _ => false,
     }
+}
+
+#[cfg(not(windows))]
+pub fn in_our_folder(_pid: u32) -> bool {
+    true
 }
 
 /// Windows paths ignore case, and a folder may end in a separator.
@@ -546,34 +563,7 @@ fn port_owner(port: u16) -> Option<u32> {
         .map(|row| row.dwOwningPid)
 }
 
-/// The process listening on IPv4 TCP `port`: its socket's inode from `/proc/net/tcp`,
-/// then the process holding that socket. Only this user's processes can be read, which is
-/// where a Portal this launcher started runs.
-#[cfg(target_os = "linux")]
-fn port_owner(port: u16) -> Option<u32> {
-    let table = fs::read_to_string("/proc/net/tcp").ok()?;
-    let inode = table.lines().skip(1).find_map(|line| {
-        let cols: Vec<&str> = line.split_whitespace().collect();
-        let local_port = cols.get(1)?.rsplit(':').next()?;
-        // 0A is LISTEN.
-        (u16::from_str_radix(local_port, 16).ok()? == port && *cols.get(3)? == "0A")
-            .then(|| cols.get(9).map(|inode| inode.to_string()))
-            .flatten()
-    })?;
-    let socket = format!("socket:[{inode}]");
-    fs::read_dir("/proc").ok()?.flatten().find_map(|entry| {
-        let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
-        let mut fds = fs::read_dir(entry.path().join("fd")).ok()?;
-        fds.any(|fd| {
-            fd.ok()
-                .and_then(|fd| fs::read_link(fd.path()).ok())
-                .is_some_and(|target| target.as_os_str() == socket.as_str())
-        })
-        .then_some(pid)
-    })
-}
-
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(windows))]
 fn port_owner(_port: u16) -> Option<u32> {
     None
 }
@@ -607,23 +597,9 @@ fn wait_for_exit(pid: u32, limit: Duration) -> bool {
     }
 }
 
-/// Linux: polls `/proc/<pid>`; a zombie waiting to be reaped has exited.
 #[cfg(not(windows))]
-fn wait_for_exit(pid: u32, limit: Duration) -> bool {
-    let deadline = Instant::now() + limit;
-    loop {
-        let gone = fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |stat| {
-            stat.rsplit_once(')')
-                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
-        });
-        if gone {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+fn wait_for_exit(_pid: u32, _limit: Duration) -> bool {
+    true
 }
 
 pub fn restart(port: u16) -> Result<(), String> {
@@ -730,24 +706,11 @@ fn install_dir() -> Result<PathBuf, String> {
 }
 
 /// `%LOCALAPPDATA%\Portal`, where the service keeps its data.
-#[cfg(windows)]
 pub fn data_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("Portal")
-}
-
-/// `$XDG_DATA_HOME/portal`, else `~/.local/share/portal`: where the service
-/// keeps its data on Linux (the service's `paths::portal_dir`).
-#[cfg(not(windows))]
-pub fn data_dir() -> PathBuf {
-    let set = |key: &str| std::env::var_os(key).filter(|value| !value.is_empty()).map(PathBuf::from);
-    set("XDG_DATA_HOME")
-        .filter(|dir| dir.is_absolute())
-        .or_else(|| Some(set("HOME")?.join(".local").join("share")))
-        .unwrap_or_else(std::env::temp_dir)
-        .join("portal")
 }
 
 pub fn log_dir() -> PathBuf {

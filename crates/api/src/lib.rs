@@ -3,16 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 
-mod app;
-mod cast;
-mod pairing;
-mod prefs;
-
-pub use app::*;
-pub use cast::*;
-pub use pairing::*;
-pub use prefs::*;
-
 pub const WATCHED_AT: f64 = 0.9;
 pub const RESUME_AFTER_SECONDS: f64 = 60.0;
 
@@ -370,15 +360,15 @@ pub struct ProgressReport {
     pub id: String,
     pub kind: TitleKind,
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub art: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub season: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub episode: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub episode_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub file: Option<String>,
     pub position: f64,
     pub duration: f64,
@@ -410,23 +400,23 @@ pub struct HistoryList {
     pub items: Vec<HistoryEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ListPut {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub kind: Option<TitleKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub art: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub year: Option<u32>,
     /// An IMDb id (`tt` and digits). Anything else is ignored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub imdb_id: Option<String>,
 }
 
 /// `POST /api/saved` body.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SavedQuery {
     #[serde(default)]
     pub ids: Vec<String>,
@@ -452,22 +442,22 @@ pub struct PlayRequest {
     pub title: String,
     #[serde(default)]
     pub quality: Quality,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub season: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub episode: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub art: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub show_title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub show_id: Option<String>,
     /// Seconds to seek before the first HLS segment. Values of 60 or below are ignored.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub resume_seconds: Option<f64>,
     /// When true, a source list the add-on shows is handed to the viewer
     /// instead of Portal choosing a copy for the quality.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub manual_links: bool,
     /// Language to prefer when the file has more than one audio track, e.g. "en".
     /// Absent means a saved player choice, then the file's own default track.
@@ -624,7 +614,7 @@ pub struct SettingsDoc {
     pub categories: Vec<SettingsCategory>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SettingWrite {
     pub value: String,
 }
@@ -661,7 +651,7 @@ pub struct PromptBody {
     pub settings_addon: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PromptAction {
     Submit,
@@ -671,17 +661,17 @@ pub enum PromptAction {
     Ok,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PromptAnswer {
     pub id: String,
     pub action: PromptAction,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub index: Option<i32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WindowRequest {
     pub visible: bool,
 }
@@ -853,11 +843,11 @@ pub struct MetadataSettings {
 
 /// `PUT /api/metadata`. A missing `tmdb_key` keeps the stored key; `null`
 /// clears it.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct MetadataPut {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub online: Option<bool>,
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present")]
     pub tmdb_key: Option<Option<String>>,
 }
 
@@ -972,21 +962,21 @@ pub struct SubtitleSettings {
 
 /// `PUT /api/subtitles/settings`. A missing field keeps what is saved;
 /// `null` (or a blank string) removes a key, username or password.
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 pub struct SubtitleSettingsPut {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub languages: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub hearing_impaired: Option<bool>,
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present")]
     pub opensubtitles_key: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present")]
     pub opensubtitles_username: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present")]
     pub opensubtitles_password: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present")]
     pub subdl_key: Option<Option<String>>,
-    #[serde(default, deserialize_with = "present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present")]
     pub subsource_key: Option<Option<String>>,
 }
 
