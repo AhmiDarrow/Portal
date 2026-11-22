@@ -381,10 +381,8 @@ fn card(ui: &Ui, title: &str) -> El {
     ui.el("p_server_card")
         .column()
         .fill_width()
-        .layout(|l| {
-            l.margin.top = 8.8;
-            l.margin.bottom = 8.8;
-        })
+        // 0.55rem above and below, collapsing between cards as CSS margins do.
+        .layout(|l| l.margin.bottom = 8.8)
         .semantics(Semantics::new(Role::Region).label(title.to_owned()))
         .child(w::heading(ui, 2, title.to_owned()).layout(|l| l.margin.bottom = 9.6))
 }
