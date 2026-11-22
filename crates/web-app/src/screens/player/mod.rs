@@ -13,11 +13,13 @@
 //! 5 s while playing (an 8 s ticker that also keeps the stream alive and looks for a next
 //! season near the end), and at once on pause, close and when the page is hidden.
 //!
-//! Seams left for later phases: subtitles (P9, `captions_seam` in `view.rs`: a disabled CC
-//! button where the captions control goes) and casting (P10, the Cast button and
-//! [`Player::on_cast`]).
+//! Casting (P10) is in `cast.rs`: the Cast button and its menu, and the player as the TV's
+//! remote while a TV plays. Subtitles (P9) are in [`subs`]: the player's own captions control
+//! and cues, fed with the job's tracks and the online search, and sent to a TV while casting.
 
+mod cast;
 mod episodes;
+pub mod subs;
 mod view;
 
 use std::cell::{Cell, RefCell};
@@ -88,6 +90,8 @@ pub(crate) struct Inner {
     /// Theater was asked for, this dock session (`theaterWanted`).
     pub(crate) theater: Signal<bool>,
     pub(crate) episodes: episodes::Episodes,
+    pub(crate) cast: cast::Cast,
+    subs: subs::Subs,
 }
 
 #[derive(Default)]
@@ -137,7 +141,9 @@ pub fn dock() -> Option<Dock> {
 pub fn view(ui: &Ui, ctx: &Ctx) -> El {
     let d = Dock::new(ui, ctx);
     DOCK.with(|s| *s.borrow_mut() = Some(d.clone()));
-    view::dock(&d)
+    let el = view::dock(&d);
+    cast::resume(&d);
+    el
 }
 
 /// A page's Play (player.ts `playFromLibrary`): opens the full player, out of the mini one.
@@ -160,6 +166,13 @@ playback-forward-tip = Forward 10 seconds (l)
 playback-mute-tip = Mute (m)
 playback-theater-tip = Theater mode (t)
 playback-skipping = Skipping to { $position }.
+playback-cast-connecting = Playing on { $device }
+playback-cast-playing = Playing on { $device }
+playback-cast-paused = Paused on { $device }
+playback-cast-buffering = Playing on { $device }
+playback-cast-ended = Playing on { $device }
+playback-cast-failed = Playing on { $device }
+playback-cast-next = Playing on { $device }
 ";
 
 fn secs(d: Duration) -> f64 {
@@ -353,8 +366,11 @@ impl Dock {
             audio: Signal::new((Vec::new(), None)),
             theater: Signal::new(false),
             episodes: episodes::Episodes::new(),
+            cast: cast::Cast::new(),
+            subs: subs::Subs::default(),
         }));
         d.wire();
+        d.wire_subs();
         d
     }
 
@@ -472,11 +488,15 @@ impl Dock {
                 });
             }
         });
-        // Volume per device; autoplay follows the shared choice.
+        // Volume per device; autoplay follows the shared choice. A TV's volume is its own,
+        // never this browser's.
         let (w2, pl) = (with.clone(), p.clone());
         let _ = self.0.ui.root().bind(move || {
             let (v, muted) = (pl.volume(), pl.is_muted());
             let _ = muted;
+            if pl.is_remote() {
+                return;
+            }
             w2(&|d| {
                 if (prefs::now().volume - v).abs() > 1e-4 {
                     prefs::set(&d.0.ctx, prefs::Patch { volume: Some(v), ..Default::default() });
@@ -572,7 +592,7 @@ impl Dock {
         let failed = untrack(|| p.state() == PlaybackState::Failed);
         let status = if ticket != 0 && self.0.target.get_untracked().ok().flatten().is_some() {
             Some(StageStatus::new(text).busy(true))
-        } else if !attached && !text.is_empty() && !failed {
+        } else if !attached && !text.is_empty() && !failed && !self.0.cast.active() {
             Some(StageStatus::new(text))
         } else {
             None
@@ -617,7 +637,13 @@ impl Dock {
     fn fail_start(&self, text: &str) {
         self.0.st.borrow_mut().start_failed = true;
         self.0.st.borrow_mut().as_next = false;
-        let shown = with_retry(text);
+        // A start meant for a TV says where Play tries again (player.ts `failStart`).
+        let shown = match self.0.cast.pending() {
+            Some(dev) if !text.to_lowercase().contains("try again") => {
+                format!("{} Press Play to try again on {}.", text.trim_end(), dev.name)
+            }
+            _ => with_retry(text),
+        };
         self.0.status.set_if_changed(shown);
         let p = &self.0.player;
         p.cancel_next();
@@ -634,7 +660,11 @@ impl Dock {
         // waits until this item is on screen.
         self.0.episodes.hold(true);
         let as_next = self.0.st.borrow().as_next;
+        // Next, a quality change or another link while casting goes to the same TV, and so
+        // does Play after one of those could not start.
+        let recast = self.0.cast.current().or_else(|| self.0.cast.pending());
         self.release_current(report, as_next);
+        self.0.cast.set_pending(recast);
         {
             let mut st = self.0.st.borrow_mut();
             st.start_failed = false;
@@ -710,6 +740,8 @@ impl Dock {
         } else if let Some(f) = then {
             f(self);
         }
+        // The TV stops with the item.
+        let casting = cast::release(self);
         let held = {
             let mut st = self.0.st.borrow_mut();
             st.skip_generation += 1;
@@ -727,10 +759,11 @@ impl Dock {
             for t in [st.audio_timer.take(), st.stall_timer.take()].into_iter().flatten() {
                 self.0.ui.cancel_timer(t);
             }
-            std::mem::take(&mut st.attached)
+            std::mem::take(&mut st.attached) || casting
         };
         self.clear_play_activity();
         self.stop_ticker();
+        self.reset_subs();
         self.0.job.set_if_changed(None);
         self.0.audio.set((Vec::new(), None));
         self.0.target.set_if_changed(None);
@@ -924,6 +957,20 @@ impl Dock {
             self.set_status("The stream did not arrive.");
             return;
         };
+        // Made for a TV: it goes there, not into this page's player.
+        if let Some(dev) = self.0.cast.take_pending() {
+            {
+                let mut st = self.0.st.borrow_mut();
+                st.last_ready = Some(job.clone());
+                st.origin = job.position.filter(|p| p.is_finite() && *p >= 0.0).unwrap_or(st.origin);
+                st.job_duration = job.duration.filter(|d| d.is_finite() && *d >= 0.0).unwrap_or(0.0);
+                st.as_next = false;
+            }
+            self.paint_audio(Some(job));
+            self.clear_play_activity();
+            cast::cast_to(self, dev);
+            return;
+        }
         let resume = self.0.target.get_untracked().ok().flatten().and_then(|t| t.resume_seconds);
         let origin = job.position.filter(|p| p.is_finite() && *p >= 0.0).unwrap_or_else(|| applied_seek(resume));
         let duration = job.duration.filter(|d| d.is_finite() && *d >= 0.0).unwrap_or(0.0);
@@ -938,18 +985,22 @@ impl Dock {
             std::mem::take(&mut st.as_next)
         };
         self.paint_audio(Some(job));
-        // P9: the job's subtitles (`job.subtitles`, `subtitles_pending`) and the online search
-        // start here, as player.ts `fillSubtitles`, `awaitSubtitles` and `searchSubtitles`.
         let mut timeline = Timeline::new(dur(origin));
         if duration > 0.0 {
             timeline = timeline.length(dur(duration));
         }
         let source = MediaSource::url(playlist);
-        if as_next && self.0.player.starting_next().is_some() {
-            self.0.player.start_next(source, Some(timeline));
-        } else {
-            self.0.player.replace_source(source, timeline);
-        }
+        let new_work = as_next && self.0.player.starting_next().is_some();
+        // The player carries its captions pick to the new stream; the dock sets it after.
+        self.quietly(|| {
+            if new_work {
+                self.0.player.start_next(source, Some(timeline));
+            } else {
+                self.0.player.replace_source(source, timeline);
+            }
+        });
+        // player.ts `fillSubtitles`, `awaitSubtitles` and `searchSubtitles`.
+        self.attach_subs(job, new_work);
         self.clear_play_activity();
         self.0.ctx.activity.notice("");
         self.set_status("");
@@ -1171,6 +1222,10 @@ impl Dock {
             (st.job.clone(), st.attached)
         };
         let Some(id) = id else { return };
+        if let Some(dev) = self.0.cast.current() {
+            cast::switch_audio(self, dev, id, index, resume);
+            return;
+        }
         if !attached || last.is_none() || self.0.player.skipping().is_some() {
             self.paint_audio(last.as_ref());
             return;
@@ -1335,8 +1390,8 @@ impl Dock {
             if !force && st.last_post.is_some_and(|l| now - l < PROGRESS_EVERY) {
                 return None;
             }
-            // Nothing attached and no place known: saving now would reset it.
-            if !st.attached && st.left_at <= 0.0 {
+            // Nothing attached and no place known: saving now would reset it. A TV's place is.
+            if !st.attached && st.left_at <= 0.0 && !self.0.cast.active() {
                 return None;
             }
         }
