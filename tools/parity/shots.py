@@ -67,16 +67,22 @@ def settle(b: wd.Browser, timeout: float, interval: float, frames: int = 2) -> t
     except wd.WebDriverError:
         pass
     end = time.monotonic() + timeout
-    last = decode(b.screenshot())
+    # The page's text too (the RemedyUI mirror follows each built page), so a frame drawn
+    # while a fetch is still out does not pass for the settled page.
+    state = lambda: (decode(b.screenshot()), b.js(MIRROR_TEXT))
+    last, text = state()
     same = 1
     while time.monotonic() < end:
         time.sleep(interval)
-        now = decode(b.screenshot())
-        same = same + 1 if now.shape == last.shape and np.array_equal(now, last) else 1
-        last = now
+        now, now_text = state()
+        same = same + 1 if now.shape == last.shape and np.array_equal(now, last) and now_text == text else 1
+        last, text = now, now_text
         if same >= frames:
             return now, True
     return last, False
+
+
+MIRROR_TEXT = "return Array.from(document.querySelectorAll('[data-remedy-a11y] [data-node]'), e => e.textContent).join('|')"
 
 
 def rect_mask(shape, rects, pad=0) -> np.ndarray:
@@ -99,6 +105,8 @@ def capture(b, url, args, mask_cfg, route, size_key, remedy_page=False):
         if not b.wait_drawn(args.load_timeout):
             print(f"  {url}: no [data-remedy-window] after {args.load_timeout:.0f} s", flush=True)
         frames = args.stable_frames
+        # Its first fetches answer after the first frame; give them a moment before frames count.
+        time.sleep(args.remedy_delay)
     img, settled = settle(b, args.settle_timeout, args.settle_interval, frames)
     text = b.js(TEXT_RECTS) or []
     sels = mask_cfg.get("selectors", {})
@@ -171,6 +179,8 @@ def main():
     ap.add_argument("--settle-interval", type=float, default=0.5)
     ap.add_argument("--stable-frames", type=int, default=3,
                     help="identical screenshots in a row that count as settled on the RemedyUI side (default %(default)s)")
+    ap.add_argument("--remedy-delay", type=float, default=2.0,
+                    help="seconds to wait after the RemedyUI page first draws, before counting stable frames (default %(default)s)")
     ap.add_argument("--load-timeout", type=float, default=300,
                     help="seconds a page may take to load, and the RemedyUI page to make its window (default %(default)s)")
     ap.add_argument("--fail-above", type=float, default=0.0, help="exit 1 when a non-text score is above this %% (default %(default)s)")

@@ -45,9 +45,7 @@ pub fn scroller(ui: &Ui, cards: Vec<El>, card_width: f32) -> El {
         .row()
         .gap(14.4)
         .align(Align::Stretch)
-        .layout(|l| {
-            l.padding = Insets { top: 8.0, bottom: 18.4, start: 3.2, end: 3.2 };
-        });
+        .padding(Insets { top: 8.0, bottom: 18.4, start: 3.2, end: 3.2 });
     let row = cards.into_iter().fold(row, |row, c| {
         row.child(c.snap_align(SnapAlign::Start).layout(move |l| {
             l.width = Length::Px(card_width);
