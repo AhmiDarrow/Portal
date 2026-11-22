@@ -33,6 +33,12 @@ thread_local! {
     static SOURCE: RefCell<Option<BrowseSource>> = const { RefCell::new(None) };
 }
 
+/// Forgets the add-on in use, so pages that name or link it look it up again (main.ts
+/// `browseSource = null`).
+pub fn forget_source() {
+    SOURCE.with(|s| *s.borrow_mut() = None);
+}
+
 /// The add-on Portal browses, once it was looked up (main.ts `browseSource`).
 pub fn known_source() -> Option<BrowseSource> {
     SOURCE.with(|s| s.borrow().clone())
