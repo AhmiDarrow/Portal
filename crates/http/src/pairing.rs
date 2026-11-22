@@ -25,7 +25,10 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use portal_api::{
+    ErrorBody, OkBody, PairApprove, PairApproved, PairMe, PairStarted, PairState, PairStatus,
+    PairedDevice, TicketQuery,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{fail, from_this_pc, ApiError, AppState};
@@ -78,38 +81,6 @@ struct Pending {
     device: Option<String>,
 }
 
-#[derive(Serialize)]
-pub struct DevicePublic {
-    id: String,
-    name: String,
-    paired_at: i64,
-    last_seen: i64,
-    address: String,
-}
-
-#[derive(Serialize)]
-pub struct Me {
-    paired: bool,
-    this_pc: bool,
-}
-
-#[derive(Serialize)]
-pub struct Started {
-    code: String,
-    ticket: String,
-    expires_in: u64,
-}
-
-#[derive(Deserialize)]
-pub struct TicketQuery {
-    ticket: String,
-}
-
-#[derive(Deserialize)]
-pub struct Approve {
-    code: String,
-}
-
 impl Pairing {
     pub fn open(portal_dir: &Path) -> Self {
         let path = portal_dir.join("devices.json");
@@ -160,7 +131,7 @@ impl Pairing {
         true
     }
 
-    fn start(&self, peer: SocketAddr, name: String) -> Result<Started, &'static str> {
+    fn start(&self, peer: SocketAddr, name: String) -> Result<PairStarted, &'static str> {
         let address = peer.ip().to_canonical();
         let mut inner = self.lock();
         self.prune(&mut inner);
@@ -202,7 +173,7 @@ impl Pairing {
             key: None,
             device: None,
         });
-        Ok(Started {
+        Ok(PairStarted {
             code,
             ticket,
             expires_in: CODE_LIFE.as_secs(),
@@ -257,11 +228,11 @@ impl Pairing {
         Ok(name)
     }
 
-    fn list(&self) -> Vec<DevicePublic> {
+    fn list(&self) -> Vec<PairedDevice> {
         self.lock()
             .devices
             .iter()
-            .map(|device| DevicePublic {
+            .map(|device| PairedDevice {
                 id: device.id.clone(),
                 name: device.name.clone(),
                 paired_at: device.paired_at,
@@ -384,7 +355,10 @@ pub async fn require(State(state): State<AppState>, request: Request, next: Next
         if !open_path(path) {
             return (
                 StatusCode::UNAUTHORIZED,
-                Json(json!({ "detail": NOT_PAIRED, "pair": true })),
+                Json(ErrorBody {
+                    detail: NOT_PAIRED.into(),
+                    pair: Some(true),
+                }),
             )
                 .into_response();
         }
@@ -417,8 +391,8 @@ pub async fn me(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-) -> Json<Me> {
-    Json(Me {
+) -> Json<PairMe> {
+    Json(PairMe {
         paired: state.0.pairing.allowed(peer, &headers),
         this_pc: this_pc(peer, &headers),
     })
@@ -428,7 +402,7 @@ pub async fn start(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-) -> Result<Json<Started>, ApiError> {
+) -> Result<Json<PairStarted>, ApiError> {
     let agent = headers
         .get(header::USER_AGENT)
         .and_then(|value| value.to_str().ok())
@@ -446,26 +420,32 @@ pub async fn status(
     Query(query): Query<TicketQuery>,
 ) -> Result<Response, ApiError> {
     match state.0.pairing.status(&query.ticket) {
-        Ok(None) => Ok(Json(json!({ "state": "waiting" })).into_response()),
+        Ok(None) => Ok(Json(PairStatus {
+            state: PairState::Waiting,
+        }).into_response()),
         Ok(Some(key)) => {
             let cookie = format!(
                 "{COOKIE}={key}; Path=/; Max-Age=315360000; HttpOnly; SameSite=Strict"
             );
-            let mut response = Json(json!({ "state": "paired" })).into_response();
+            let mut response = Json(PairStatus {
+            state: PairState::Paired,
+        }).into_response();
             if let Ok(value) = HeaderValue::from_str(&cookie) {
                 response.headers_mut().insert(header::SET_COOKIE, value);
             }
             Ok(response)
         }
-        Err(()) => Ok(Json(json!({ "state": "expired" })).into_response()),
+        Err(()) => Ok(Json(PairStatus {
+            state: PairState::Expired,
+        }).into_response()),
     }
 }
 
 pub async fn approve(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(body): Json<Approve>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+    Json(body): Json<PairApprove>,
+) -> Result<Json<PairApproved>, ApiError> {
     if !from_this_pc(peer) {
         return Err(fail(StatusCode::FORBIDDEN, THIS_PC_ONLY));
     }
@@ -475,13 +455,13 @@ pub async fn approve(
         .approve(&body.code)
         .map_err(|detail| fail(StatusCode::BAD_REQUEST, detail))?;
     tracing::info!(device = %name, "Paired a device");
-    Ok(Json(json!({ "ok": true, "name": name })))
+    Ok(Json(PairApproved { ok: true, name }))
 }
 
 pub async fn devices(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-) -> Result<Json<Vec<DevicePublic>>, ApiError> {
+) -> Result<Json<Vec<PairedDevice>>, ApiError> {
     if !from_this_pc(peer) {
         return Err(fail(StatusCode::FORBIDDEN, THIS_PC_ONLY));
     }
@@ -492,14 +472,14 @@ pub async fn device_remove(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     UrlPath(id): UrlPath<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<OkBody>, ApiError> {
     if !from_this_pc(peer) {
         return Err(fail(StatusCode::FORBIDDEN, THIS_PC_ONLY));
     }
     if !state.0.pairing.remove(&id) {
         return Err(fail(StatusCode::NOT_FOUND, "That device is not paired."));
     }
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(OkBody { ok: true }))
 }
 
 fn cookie_key(headers: &HeaderMap) -> Option<String> {

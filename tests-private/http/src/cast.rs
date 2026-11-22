@@ -154,11 +154,11 @@ fn session_set_requires_a_live_receiver_and_clear_empties_it() {
     assert_eq!(session.job_id, "job-1");
     assert_eq!(session.title.as_deref(), Some("Pilot"));
     assert!(session.replay.is_none());
-    let view = SessionView::from_session(&session);
+    let view = session_view(&session);
     let mut slot = Some(session);
     clear_session(&mut slot);
     assert!(slot.is_none());
-    let empty = SessionView::empty();
+    let empty = SessionView::default();
     let value = serde_json::to_value(&empty).unwrap();
     assert!(value["receiver_id"].is_null());
     assert!(value["job_id"].is_null());
@@ -302,9 +302,9 @@ fn a_session_view_shows_a_lost_cast_only_without_a_live_one() {
         seen_ms: 1,
     }];
     let session = assign_session(&receivers, "tv", "job", None, None).unwrap();
-    let live = serde_json::to_value(SessionView::from_session(&session)).unwrap();
+    let live = serde_json::to_value(session_view(&session)).unwrap();
     assert!(live.get("lost").is_none());
-    let empty = serde_json::to_value(SessionView::empty()).unwrap();
+    let empty = serde_json::to_value(SessionView::default()).unwrap();
     assert!(empty.get("lost").is_none());
 }
 
@@ -604,7 +604,7 @@ fn a_device_stop_ends_the_watch_and_later_lines_are_ignored() {
     );
     assert_eq!(hub.device_view().job_id.as_deref(), Some("job-1"));
     assert_eq!(
-        serde_json::to_value(DeviceView::empty()).unwrap()["active"],
+        serde_json::to_value(DeviceView::default()).unwrap()["active"],
         false
     );
 }
