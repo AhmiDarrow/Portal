@@ -58,6 +58,8 @@ impl Default for Limits {
     }
 }
 
+// The server sets these through the environment; the setters are for code that builds one.
+#[cfg_attr(not(test), allow(dead_code))]
 impl Limits {
     /// The defaults, with any the environment sets.
     pub fn from_env() -> Self {
