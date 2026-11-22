@@ -18,7 +18,7 @@ use remedy_ui::core::{Color, CornerRadii, Insets, Point, Rect, Size};
 use remedy_ui::layout::{Align, Justify, Length};
 use remedy_ui::paint::Brush;
 use remedy_ui::reactive::{untrack, Cancel, Signal};
-use remedy_ui::style::{LineHeight, States, StylePatch, StyleSheet};
+use remedy_ui::style::{BorderEdge, BorderSide, BorderStyle, LineHeight, States, StylePatch, StyleSheet};
 use remedy_ui::view::TextField;
 use remedy_ui::widgets as w;
 use remedy_ui::{El, Ui};
@@ -423,19 +423,10 @@ fn when(el: El, on: impl Fn() -> bool + 'static) -> El {
     })
 }
 
-/// `.row` inside a card; `sep` draws the hairline over a row that follows another.
+/// `.row` inside a card; `sep` puts the hairline over a row that follows another.
 fn row(ui: &Ui, sep: bool) -> El {
     let el = ui.el(if sep { "p_server_row_sep" } else { "p_server_row" });
-    let el = if sep {
-        // ENGINE GAP: no per-side border (`border-top`) in StylePatch; the hairline is
-        // painted at the row's top edge in the line color at 75%.
-        el.layout(|l| l.margin.top = 2.4).paint(|cx| {
-            let c = cx.theme.colors.line.unwrap_or(cx.theme.colors.muted);
-            cx.list.fill_rect(Rect::new(0.0, 0.0, cx.size.width, 1.0), Brush::Solid(mix(c, 0.75, Color::TRANSPARENT)));
-        })
-    } else {
-        el
-    };
+    let el = if sep { el.layout(|l| l.margin.top = 2.4) } else { el };
     el.row()
         .align(Align::Center)
         .fill_width()
@@ -861,22 +852,9 @@ fn reload_when_back(ctx: &Ctx, ticks: u32, gone: bool) {
 
 // ---- Devices ----
 
-fn seen_at(ui: &Ui, ms: i64) -> String {
-    if ms <= 0 {
-        return String::new();
-    }
-    // shortcut: the offset now, not at that instant (a date across a daylight saving change
-    // is an hour off); the engine gives no zone history.
-    let local = ms.div_euclid(1000) + i64::from(ui.local_time().utc_offset);
-    let date = remedy_ui::i18n::Date::from_days_since_epoch(local.div_euclid(86_400));
-    let secs = local.rem_euclid(86_400);
-    let time = remedy_ui::i18n::Time::new((secs / 3600) as u8, ((secs % 3600) / 60) as u8).unwrap_or_default();
-    remedy_ui::i18n::CalendarSymbols::for_locale(&crate::screens::info::page_locale(ui)).date_time(date, time)
-}
-
 fn devices_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
     let d = s.devices;
-    let field = w::text_input(ui, "Number shown on the device").placeholder("123 456").numeric();
+    let field = w::text_input(ui, "Number shown on the device").placeholder("123 456").numeric().max_length(7);
     let (c1, f1) = (ctx.clone(), field.clone());
     let submit = Rc::new(move || {
         let code: String = f1.value().chars().filter(char::is_ascii_digit).collect();
@@ -910,7 +888,7 @@ fn devices_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
                 return;
             }
             for (i, dev) in rows.into_iter().enumerate() {
-                let seen = seen_at(&u, dev.last_seen);
+                let seen = crate::screens::info::local_string(&u, dev.last_seen);
                 let facts = [dev.address.clone(), if seen.is_empty() { seen } else { format!("last seen {seen}") }]
                     .into_iter()
                     .filter(|f| !f.is_empty())
@@ -1098,7 +1076,7 @@ fn subs_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
             let options: Vec<String> = std::iter::once(first).chain(addable.iter().map(|(_, n)| (*n).to_owned())).collect();
             let chosen = Signal::new(0usize);
             let (c3, cur) = (c.clone(), current.clone());
-            let add = w::select(&u, "Add a language", options, chosen).variant("settings").disabled(full || busy);
+            let add = w::select(&u, "Add a language", options, chosen).variant("settings").justify(Justify::SpaceBetween).disabled(full || busy);
             let add = add.bind(move || {
                 let i = chosen.get();
                 if i == 0 {
@@ -1647,8 +1625,15 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
             .padding(Insets { top: 13.6, bottom: 13.6, start: 14.4, end: 14.4 }),
     );
     s.rule("p_server_card", None, States::HOVER, StylePatch::default().border(mix(k.gold, 0.48, k.line)));
-    // `.server-card > .row + .row`: room under the hairline [`row`] draws.
-    s.rule("p_server_row_sep", None, States::NONE, StylePatch::default().padding(Insets { top: 7.2, bottom: 0.0, start: 0.0, end: 0.0 }));
+    // `.server-card > .row + .row`: a hairline over it, the line at 75%, and room under it.
+    s.rule(
+        "p_server_row_sep",
+        None,
+        States::NONE,
+        StylePatch::default()
+            .border_side(BorderEdge::Top, BorderSide::new(1.0, mix(k.line, 0.75, Color::TRANSPARENT)))
+            .padding(Insets { top: 7.2, bottom: 0.0, start: 0.0, end: 0.0 }),
+    );
     s.rule("p_server_note", None, States::NONE, StylePatch::default().foreground(k.muted).text_size(14.72));
     s.rule("p_server_small", None, States::NONE, StylePatch::default().foreground(k.muted).text_size(14.72));
     s.rule("p_key_saved", None, States::NONE, StylePatch::default().foreground(k.gold).text_size(14.72));
@@ -1683,12 +1668,11 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         "p_font_sample",
         None,
         States::NONE,
-        // ENGINE GAP: `border-style: dashed` (styles.css `.font-sample`) has no StylePatch
-        // equivalent; drawn solid until it does.
         StylePatch::default()
             .background(k.well)
             .border(k.line)
             .border_width(1.0)
+            .border_style(BorderStyle::Dashed)
             .radius(8.0)
             .padding(Insets { top: 11.2, bottom: 11.2, start: 13.6, end: 13.6 }),
     );
