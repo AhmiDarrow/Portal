@@ -1,84 +1,44 @@
-//! The tray icon. `portal-launcher.exe` without `--stop` becomes this
-//! long-running process: a hidden window owns the notification-area icon, a
-//! timer checks the service every few seconds, and anything that waits on the
-//! service runs on a worker thread that posts its result back. The message
-//! loop never blocks on HTTP.
+//! The tray icon. `portal-launcher` without `--stop` becomes this long-running process: the
+//! engine's tray icon shows the menu `Model` builds, a timer checks the service every few
+//! seconds, and anything that waits on the service runs as background work whose result
+//! comes back to the UI thread. Questions and problems are shown in Portal's own theme.
+//!
+//! A second launch hands its arguments here (`AppConfig::single_instance_reply`) and exits
+//! with the code this answers: `--stop` quits Portal and answers once the service stopped.
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM,
-    LRESULT, WAIT_OBJECT_0, WPARAM,
+use remedy_ui::host::{
+    Notification, TrayEvent, TrayIcon, TrayImage, TrayItem, Urgency, WindowIcon,
 };
-use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::System::Threading::{
-    CreateMutexW, OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
-};
-use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO,
-    NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NINF_KEY, NIN_SELECT,
-    NOTIFYICONDATAW, NOTIFYICON_VERSION_4,
-};
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, ChangeWindowMessageFilterEx, CreatePopupMenu, CreateWindowExW, DefWindowProcW,
-    DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW, GetMessageW, GetSystemMetrics,
-    GetWindowThreadProcessId, KillTimer, LoadIconW, LoadImageW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, RegisterWindowMessageW, SetForegroundWindow, SetMenuDefaultItem, SetTimer,
-    TrackPopupMenu, TranslateMessage, HICON, HMENU, IDI_APPLICATION, IMAGE_ICON, LR_DEFAULTCOLOR,
-    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, MSG, MSGFLT_ALLOW, SM_CXSMICON,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
-    WM_ENDSESSION, WM_NULL, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPED,
-};
+use remedy_ui::reactive::Signal;
+use remedy_ui::{App, ConfirmSpec, InstanceReply, ReplyLater};
 
 use crate::autostart;
-use crate::model::{fill_wide, Cmd, Entry, Job, Model, Reaction, Service};
+use crate::model::{Cmd, Entry, Job, Model, Reaction, Service};
 use crate::service::{self, EncoderChoice, Health, LanReply, Update};
-use crate::ui::{self, wide};
+use crate::ui;
 
-/// Window class of the hidden window. `--stop` finds a running tray by it.
-const CLASS: &str = "PortalTray";
-/// Held by the running tray so a second launch knows it is not the first.
-const MUTEX: &str = r"Local\PortalTray";
-/// Asks a running tray to exit without touching the service.
-const EXIT_MESSAGE: &str = "PortalTrayExit";
-/// Asks a running tray to restart the service, as its menu does. The
-/// dashboard asks first, so the tray does not ask again.
-const RESTART_MESSAGE: &str = "PortalTrayRestart";
-const WM_TRAY: u32 = WM_APP + 1;
-const WM_WORKER: u32 = WM_APP + 2;
-const ICON_ID: u32 = 1;
-const HEALTH_TIMER: usize = 1;
-const HEALTH_EVERY_MS: u32 = 5_000;
-const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
-/// A double click arrives as two selects; open the dashboard once.
+/// How often the service is checked.
+pub const HEALTH_EVERY: Duration = Duration::from_secs(5);
+/// A double click arrives as two activations; open the dashboard once.
 const OPEN_DEBOUNCE: Duration = Duration::from_millis(800);
 /// Present once the first-run notification was shown.
 const INTRO_MARKER: &str = "tray-intro-shown";
 
 // The dashboard's Portal menu asks the same questions (web/src/appmenu.ts).
-const QUIT_TEXT: &str = "Quit Portal?\n\n\
+pub const QUIT_TEXT: &str = "Quit Portal?\n\n\
     This stops the Portal server. Anything playing or casting will stop, and Kodi will close \
     if Portal started it.\n\n\
     Open Portal again from the Start menu or desktop.";
-const RESTART_TEXT: &str = "Restart the Portal server? Anything playing will stop.";
-const LAN_TEXT: &str =
+pub const RESTART_TEXT: &str = "Restart the Portal server? Anything playing will stop.";
+pub const LAN_TEXT: &str =
     "Changing who can reach Portal can restart it, which stops anything playing. Continue?";
 const UPDATE_HINT: &str = "Right-click the Portal icon and choose Install update.";
 
-static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
-static EXIT_REQUEST: AtomicU32 = AtomicU32::new(0);
-static RESTART_REQUEST: AtomicU32 = AtomicU32::new(0);
-
-thread_local! {
-    static APP: RefCell<Option<App>> = const { RefCell::new(None) };
-    /// Message boxes open right now. Tray clicks wait until they close.
-    static DIALOGS: Cell<u32> = const { Cell::new(0) };
-}
-
-/// Results from worker threads.
+/// Results of background work.
 enum Event {
     Health(Health),
     Started {
@@ -94,642 +54,261 @@ enum Event {
     Stopped(Result<bool, String>),
 }
 
-/// Hands worker results to the UI thread and wakes it.
-#[derive(Clone)]
-struct Poster {
-    events: Sender<Event>,
-    /// The hidden window, as an integer so the poster can cross threads.
-    hwnd: usize,
-}
-
-impl Poster {
-    fn spawn(&self, work: impl FnOnce() -> Event + Send + 'static) {
-        let poster = self.clone();
-        std::thread::spawn(move || poster.send(work()));
-    }
-
-    fn send(&self, event: Event) {
-        if self.events.send(event).is_ok() {
-            // SAFETY: posting to a window that is already gone just fails.
-            unsafe { PostMessageW(self.hwnd as HWND, WM_WORKER, 0, 0) };
-        }
-    }
-}
-
-struct App {
-    hwnd: HWND,
-    icon: HICON,
-    model: Model,
-    events: Receiver<Event>,
-    poster: Poster,
-    icon_shown: bool,
-    health_pending: bool,
+struct State {
+    app: App,
+    model: RefCell<Model>,
+    /// Bumped whenever the menu or the tooltip may have changed: the tray follows it.
+    shown_rev: Signal<u64>,
+    /// The icon stays up until Portal quits (or its first start fails).
+    tray_up: Cell<bool>,
+    icon: (TrayImage, Option<WindowIcon>),
+    health_pending: Cell<bool>,
     /// A page to open once the service answers.
-    pending_open: Option<String>,
-    last_open: Option<Instant>,
-    /// Why the first start failed; `run` returns it.
-    failure: Option<String>,
+    pending_open: RefCell<Option<String>>,
+    last_open: Cell<Option<Instant>>,
+    /// Dialogs open now. Tray clicks wait until they close, as they did for message boxes.
+    dialogs: Cell<u32>,
+    /// Later launches (`--stop`) waiting for the service to stop, and whether each is quiet.
+    stop_replies: RefCell<Vec<(ReplyLater, bool)>>,
+    /// The process's exit code once the app quits.
+    exit_code: Rc<Cell<i32>>,
+    next_notice: Cell<u64>,
 }
 
-/// Held for the life of the tray process.
-pub struct Instance(HANDLE);
+/// The running tray. Cheap to clone; every clone is the same tray.
+#[derive(Clone)]
+pub struct Tray(Rc<State>);
 
-impl Drop for Instance {
-    fn drop(&mut self) {
-        // SAFETY: the handle came from CreateMutexW and is closed once.
-        unsafe { CloseHandle(self.0) };
+impl Tray {
+    /// Puts the icon up and starts the service on `port` (opening the dashboard once it
+    /// answers when `open_browser`), on `app`. The process should exit with `exit_code`
+    /// once the app quits.
+    pub fn start(app: &App, port: u16, open_browser: bool, exit_code: Rc<Cell<i32>>) -> Tray {
+        app.keep_running(true);
+        let mut model = Model::new(port);
+        model.autostart = autostart::enabled();
+        let tray = Tray(Rc::new(State {
+            app: app.clone(),
+            model: RefCell::new(model),
+            shown_rev: Signal::new(0),
+            tray_up: Cell::new(true),
+            icon: ui::icon(),
+            health_pending: Cell::new(false),
+            pending_open: RefCell::new(open_browser.then(|| service::dashboard_url(port))),
+            last_open: Cell::new(None),
+            dialogs: Cell::new(0),
+            stop_replies: RefCell::new(Vec::new()),
+            exit_code,
+            next_notice: Cell::new(1),
+        }));
+        let t = tray.clone();
+        app.tray_dyn(move || t.icon_now());
+        let t = tray.clone();
+        app.on_tray(move |event| t.on_tray(event));
+        let t = tray.clone();
+        app.on_second_instance(move |args| t.on_launch(&args));
+        tray.begin(Job::Starting, false, true);
+        tray.schedule_health();
+        tray
     }
-}
 
-/// Claims the single-instance mutex. `None` when a tray already runs.
-pub fn claim_instance() -> Option<Instance> {
-    let name = wide(MUTEX);
-    // SAFETY: the name is NUL-terminated; no security attributes.
-    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-    // SAFETY: reads this thread's last error right after the call.
-    let error = unsafe { GetLastError() };
-    if error == ERROR_ALREADY_EXISTS {
-        // SAFETY: a handle to the existing mutex; ours to close.
-        unsafe { CloseHandle(handle) };
-        return None;
+    /// The model, for tests and the brand menu.
+    pub fn model(&self) -> std::cell::Ref<'_, Model> {
+        self.0.model.borrow()
     }
-    // A tray running as administrator holds a mutex this one may not open.
-    // Without this check a second tray would start next to it.
-    if handle.is_null() && error == ERROR_ACCESS_DENIED {
-        return None;
-    }
-    Some(Instance(handle))
-}
 
-/// Asks a running tray from this install folder to restart the service.
-/// False when there is none to ask.
-pub fn request_restart() -> bool {
-    let class = wide(CLASS);
-    // SAFETY: the class name is NUL-terminated; no window title filter.
-    let hwnd = unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) };
-    if hwnd.is_null() {
-        return false;
+    fn changed(&self) {
+        self.0.shown_rev.update(|r| *r += 1);
     }
-    let mut pid = 0u32;
-    // SAFETY: hwnd came from FindWindowW; pid is a valid out pointer.
-    unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
-    if !crate::service::in_our_folder(pid) {
-        return false;
-    }
-    // SAFETY: posting to another process's window with no pointers attached.
-    unsafe { PostMessageW(hwnd, register_message(RESTART_MESSAGE), 0, 0) != 0 }
-}
 
-/// Asks a running tray to exit without stopping the service, and waits for
-/// its process to end. `Ok(false)` when no tray is running.
-pub fn close_running(wait: Duration) -> Result<bool, String> {
-    let class = wide(CLASS);
-    let find = || {
-        // SAFETY: the class name is NUL-terminated; no window title filter.
-        unsafe { FindWindowW(class.as_ptr(), std::ptr::null()) }
-    };
-    let hwnd = find();
-    if hwnd.is_null() {
-        return Ok(false);
+    /// What the tray shows now: the model's tooltip and menu, until Portal quits.
+    fn icon_now(&self) -> Option<TrayIcon> {
+        self.0.shown_rev.get();
+        if !self.0.tray_up.get() {
+            return None;
+        }
+        let model = self.0.model.borrow();
+        let (image, artwork) = &self.0.icon;
+        let tray = TrayIcon::new(model.tooltip(), image.clone(), tray_items(&model.menu()));
+        Some(match artwork {
+            Some(a) => tray.with_artwork(a.clone()),
+            None => tray,
+        })
     }
-    let mut pid = 0u32;
-    // SAFETY: hwnd came from FindWindowW; pid is a valid out pointer.
-    unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
-    // A tray from another install folder is not this launcher's to close.
-    if !crate::service::in_our_folder(pid) {
-        return Ok(false);
+
+    fn hide_icon(&self) {
+        self.0.tray_up.set(false);
+        self.changed();
     }
-    // SAFETY: plain call; a null handle is handled below.
-    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
-    // SAFETY: posting to another process's window with no pointers attached.
-    unsafe { PostMessageW(hwnd, register_message(EXIT_MESSAGE), 0, 0) };
-    let closed = if process.is_null() {
-        let deadline = Instant::now() + wait;
-        loop {
-            if find().is_null() {
-                break true;
+
+    fn schedule_health(&self) {
+        let t = self.clone();
+        self.0.app.after(HEALTH_EVERY, move || {
+            if t.0.tray_up.get() || t.0.model.borrow().quitting() {
+                t.check_health();
+                t.schedule_health();
             }
-            if Instant::now() >= deadline {
-                break false;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    } else {
-        let millis = u32::try_from(wait.as_millis()).unwrap_or(u32::MAX);
-        // SAFETY: process is a valid handle opened with SYNCHRONIZE, closed once.
-        unsafe {
-            let done = WaitForSingleObject(process, millis) == WAIT_OBJECT_0;
-            CloseHandle(process);
-            done
-        }
-    };
-    if closed {
-        Ok(true)
-    } else {
-        Err("Portal's tray icon did not close. End portal-launcher.exe in Task Manager.".into())
+        });
     }
-}
 
-/// Runs the tray until the user quits Portal or `--stop` asks it to exit.
-pub fn run(open_browser: bool) -> Result<(), String> {
-    let port = service::port();
-    TASKBAR_CREATED.store(register_message("TaskbarCreated"), Ordering::Relaxed);
-    EXIT_REQUEST.store(register_message(EXIT_MESSAGE), Ordering::Relaxed);
-    RESTART_REQUEST.store(register_message(RESTART_MESSAGE), Ordering::Relaxed);
-    let hwnd = create_window()?;
-    let (events, receiver) = channel();
-    let mut model = Model::new(port);
-    model.autostart = autostart::enabled();
-    let app = App {
-        hwnd,
-        icon: load_icon(),
-        model,
-        events: receiver,
-        poster: Poster {
-            events,
-            hwnd: hwnd as usize,
-        },
-        icon_shown: false,
-        health_pending: false,
-        pending_open: open_browser.then(|| service::dashboard_url(port)),
-        last_open: None,
-        failure: None,
-    };
-    APP.with(|cell| *cell.borrow_mut() = Some(app));
-    with_app(|app| {
-        app.show_icon();
-        app.start(Job::Starting, false, true);
-    });
-    // SAFETY: hwnd is our window; no timer callback, so WM_TIMER is posted.
-    unsafe { SetTimer(hwnd, HEALTH_TIMER, HEALTH_EVERY_MS, None) };
-
-    // SAFETY: MSG is plain data and the loop only passes it back to Windows.
-    unsafe {
-        let mut msg: MSG = std::mem::zeroed();
-        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-    let app = APP.with(|cell| cell.borrow_mut().take());
-    match app.and_then(|app| app.failure) {
-        Some(message) => Err(message),
-        None => Ok(()),
-    }
-}
-
-fn register_message(name: &str) -> u32 {
-    let name = wide(name);
-    // SAFETY: the name is NUL-terminated and outlives the call.
-    unsafe { RegisterWindowMessageW(name.as_ptr()) }
-}
-
-fn create_window() -> Result<HWND, String> {
-    let class = wide(CLASS);
-    let title = wide("Portal");
-    // SAFETY: a null module name returns this executable's handle. The class
-    // and title strings outlive the calls, which copy them. The window is
-    // never shown; it only receives messages.
-    unsafe {
-        let instance = GetModuleHandleW(std::ptr::null());
-        let mut class_info: WNDCLASSEXW = std::mem::zeroed();
-        class_info.cbSize = std::mem::size_of::<WNDCLASSEXW>() as u32;
-        class_info.lpfnWndProc = Some(window_proc);
-        class_info.hInstance = instance;
-        class_info.lpszClassName = class.as_ptr();
-        if RegisterClassExW(&class_info) == 0 {
-            return Err("Portal could not create its tray icon.".into());
-        }
-        let hwnd = CreateWindowExW(
-            0,
-            class.as_ptr(),
-            title.as_ptr(),
-            WS_OVERLAPPED,
-            0,
-            0,
-            0,
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            instance,
-            std::ptr::null(),
-        );
-        if hwnd.is_null() {
-            return Err("Portal could not create its tray icon.".into());
-        }
-        // An elevated tray would otherwise miss these from Explorer and from
-        // a non-elevated `--stop`.
-        for message in [
-            TASKBAR_CREATED.load(Ordering::Relaxed),
-            EXIT_REQUEST.load(Ordering::Relaxed),
-            RESTART_REQUEST.load(Ordering::Relaxed),
-        ] {
-            ChangeWindowMessageFilterEx(hwnd, message, MSGFLT_ALLOW, std::ptr::null_mut());
-        }
-        Ok(hwnd)
-    }
-}
-
-/// The exe's own icon (resource 1, embedded by assets/winres.rs).
-fn load_icon() -> HICON {
-    // SAFETY: resource 1 is passed as MAKEINTRESOURCE; a failed load returns
-    // null and falls back to the stock application icon.
-    unsafe {
-        let size = GetSystemMetrics(SM_CXSMICON);
-        let icon = LoadImageW(
-            GetModuleHandleW(std::ptr::null()),
-            std::ptr::without_provenance::<u16>(1),
-            IMAGE_ICON,
-            size,
-            size,
-            LR_DEFAULTCOLOR,
-        );
-        if icon.is_null() {
-            LoadIconW(std::ptr::null_mut(), IDI_APPLICATION)
-        } else {
-            icon
-        }
-    }
-}
-
-fn with_app<R>(work: impl FnOnce(&mut App) -> R) -> Option<R> {
-    // A nested call (a message arriving while the state is borrowed) is
-    // skipped; worker events stay queued for the next wake-up.
-    APP.with(|cell| cell.try_borrow_mut().ok()?.as_mut().map(work))
-}
-
-/// Shows a message box. Never call this while the state is borrowed.
-fn dialog<R>(show: impl FnOnce() -> R) -> R {
-    DIALOGS.with(|open| open.set(open.get() + 1));
-    let result = show();
-    DIALOGS.with(|open| open.set(open.get().saturating_sub(1)));
-    result
-}
-
-fn in_dialog() -> bool {
-    DIALOGS.with(|open| open.get() > 0)
-}
-
-fn registered(slot: &AtomicU32, msg: u32) -> bool {
-    let value = slot.load(Ordering::Relaxed);
-    value != 0 && value == msg
-}
-
-unsafe extern "system" fn window_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        WM_TRAY => on_tray((lparam as u32) & 0xFFFF, wparam),
-        WM_WORKER => drain_events(),
-        WM_TIMER if wparam == HEALTH_TIMER => {
-            drain_events();
-            with_app(App::check_health);
-        }
-        // WM_CLOSE comes from Restart Manager; the exit request from `--stop`.
-        WM_CLOSE => exit_quietly(),
-        _ if registered(&EXIT_REQUEST, msg) => exit_quietly(),
-        _ if registered(&RESTART_REQUEST, msg) => {
-            with_app(|app| app.start(Job::Restarting, true, false));
-        }
-        _ if registered(&TASKBAR_CREATED, msg) => {
-            with_app(|app| {
-                app.icon_shown = false;
-                app.show_icon();
-            });
-        }
-        WM_ENDSESSION if wparam != 0 => {
-            with_app(App::hide_icon);
-        }
-        // SAFETY: plain call from the window's own thread.
-        WM_DESTROY => unsafe { PostQuitMessage(0) },
-        // SAFETY: forwarding the message as received.
-        _ => return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
-    0
-}
-
-/// Notification-area callbacks (NOTIFYICON_VERSION_4).
-fn on_tray(event: u32, wparam: WPARAM) {
-    if in_dialog() {
-        return;
-    }
-    match event {
-        NIN_SELECT | NIN_KEYSELECT => {
-            let now = Instant::now();
-            let fresh = with_app(|app| {
-                let fresh = app
-                    .last_open
-                    .is_none_or(|at| now.duration_since(at) >= OPEN_DEBOUNCE);
-                app.last_open = Some(now);
-                fresh
-            });
-            if fresh == Some(true) {
-                command(Cmd::Open);
-            }
-        }
-        WM_CONTEXTMENU => {
-            // The anchor point, in screen coordinates.
-            let x = (wparam & 0xFFFF) as u16 as i16 as i32;
-            let y = ((wparam >> 16) & 0xFFFF) as u16 as i16 as i32;
-            show_menu(x, y);
-        }
-        _ => {}
-    }
-}
-
-fn show_menu(x: i32, y: i32) {
-    let Some((hwnd, entries)) = with_app(|app| {
-        app.model.autostart = autostart::enabled();
-        (app.hwnd, app.model.menu())
-    }) else {
-        return;
-    };
-    // SAFETY: the menu is built, shown and destroyed here. SetForegroundWindow
-    // and the WM_NULL post are the documented way to make a tray menu close
-    // when the user clicks elsewhere.
-    let chosen = unsafe {
-        let menu = build_menu(&entries);
-        SetForegroundWindow(hwnd);
-        let chosen = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-            x,
-            y,
-            0,
-            hwnd,
-            std::ptr::null(),
-        );
-        PostMessageW(hwnd, WM_NULL, 0, 0);
-        DestroyMenu(menu);
-        chosen
-    };
-    if let Some(cmd) = usize::try_from(chosen).ok().and_then(Cmd::from_id) {
-        command(cmd);
-    }
-}
-
-/// Builds a popup menu from the model's entries.
-///
-/// # Safety
-/// The caller destroys the returned menu; DestroyMenu also frees submenus.
-unsafe fn build_menu(entries: &[Entry]) -> HMENU {
-    let menu = CreatePopupMenu();
-    for entry in entries {
-        match entry {
-            Entry::Separator => {
-                AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-            }
-            Entry::Submenu(label, inner) => {
-                let submenu = build_menu(inner);
-                let label = wide(label);
-                AppendMenuW(menu, MF_POPUP, submenu as usize, label.as_ptr());
-            }
-            Entry::Item(item) => {
-                let mut flags = MF_STRING;
-                if item.checked {
-                    flags |= MF_CHECKED;
-                }
-                if !item.enabled {
-                    flags |= MF_GRAYED;
-                }
-                let id = item.cmd.map_or(0, Cmd::id);
-                let label = wide(&item.label);
-                AppendMenuW(menu, flags, id, label.as_ptr());
-                if item.default {
-                    SetMenuDefaultItem(menu, id as u32, 0);
-                }
-            }
-        }
-    }
-    menu
-}
-
-/// Runs a menu command. Confirmations happen here, outside the state borrow.
-fn command(cmd: Cmd) {
-    match cmd {
-        Cmd::Open => open_page(service::dashboard_url),
-        Cmd::OpenServerPage => open_page(service::server_page_url),
-        Cmd::OpenLogs => {
-            let dir = service::log_dir();
-            let _ = std::fs::create_dir_all(&dir);
-            ui::open(&dir.display().to_string());
-        }
-        Cmd::ToggleAutostart => {
-            let next = !autostart::enabled();
-            match autostart::set(next) {
-                Ok(()) => {
-                    with_app(|app| app.model.autostart = next);
-                }
-                Err(message) => dialog(|| ui::alert(&message)),
-            }
-        }
-        // Asked first, as on the dashboard: nothing changes when the answer is no.
-        Cmd::ToggleLan => {
-            if dialog(|| ui::confirm(LAN_TEXT)) {
-                with_app(App::toggle_lan);
-            }
-        }
-        Cmd::ToggleEncoder => {
-            with_app(App::toggle_encoder);
-        }
-        Cmd::RestartEngine => {
-            with_app(App::restart_engine);
-        }
-        Cmd::StartServer => {
-            with_app(|app| app.start(Job::Starting, true, false));
-        }
-        Cmd::RestartServer => {
-            if dialog(|| ui::confirm(RESTART_TEXT)) {
-                with_app(|app| app.start(Job::Restarting, true, false));
-            }
-        }
-        Cmd::CheckUpdates => {
-            with_app(App::check_updates);
-        }
-        Cmd::InstallUpdate => {
-            let Some(version) =
-                with_app(|app| app.model.offered_update().map(str::to_string)).flatten()
-            else {
-                return;
-            };
-            let question = format!(
-                "Install Portal {version}?\n\n\
-                 Portal will close, update, and reopen. Anything playing will stop."
-            );
-            if dialog(|| ui::confirm(&question)) {
-                with_app(App::install_update);
-            }
-        }
-        Cmd::Quit => {
-            if dialog(|| ui::confirm(QUIT_TEXT)) {
-                with_app(App::quit);
-            }
-        }
-    }
-}
-
-/// Opens a dashboard page, starting the service first when it is down.
-fn open_page(url: fn(u16) -> String) {
-    enum Next {
-        Open(String),
-        Alert(String),
-        Wait,
-    }
-    let next = with_app(|app| {
-        let target = url(app.model.port);
-        if app.model.quitting() {
-            return Next::Wait;
-        }
-        match (app.model.job, app.model.service) {
-            (Some(_), _) => {
-                app.pending_open = Some(target);
-                Next::Wait
-            }
-            (None, Service::Running) => Next::Open(target),
-            (None, Service::PortTaken) => Next::Alert(service::port_taken_message(app.model.port)),
-            (None, Service::Stopped | Service::Unknown) => {
-                app.pending_open = Some(target);
-                app.start(Job::Starting, true, false);
-                Next::Wait
-            }
-        }
-    });
-    match next {
-        Some(Next::Open(target)) => ui::open(&target),
-        Some(Next::Alert(message)) => dialog(|| ui::alert(&message)),
-        Some(Next::Wait) | None => {}
-    }
-}
-
-fn drain_events() {
-    while let Some(event) = with_app(|app| app.events.try_recv().ok()).flatten() {
-        handle(event);
-    }
-}
-
-fn handle(event: Event) {
-    match event {
-        Event::Health(health) => {
-            let reactions = with_app(|app| {
-                app.health_pending = false;
-                let reactions = app.model.on_health(health, Instant::now());
-                app.refresh_tip();
-                reactions
-            })
-            .unwrap_or_default();
-            for reaction in reactions {
-                with_app(|app| app.react(reaction));
-            }
-        }
-        Event::Started {
-            result,
-            by_user,
-            first,
-        } => {
-            let quit = with_app(|app| {
-                let quit = app.model.started(result.is_ok(), by_user);
-                if quit {
-                    // Quit was chosen while starting: stop what just started.
-                    app.pending_open = None;
-                    app.stop();
-                }
-                quit
-            });
-            if quit.unwrap_or(false) {
-                return;
-            }
-            let open = with_app(|app| {
-                app.refresh_tip();
-                let open = app.pending_open.take();
-                if result.is_ok() {
-                    if first {
-                        app.introduce();
-                    }
-                    app.check_health();
-                }
-                open.filter(|_| result.is_ok())
-            })
-            .flatten();
-            if let Some(target) = open {
-                ui::open(&target);
-            }
-            if let Err(message) = result {
-                if first {
-                    with_app(|app| app.failure = Some(message));
-                    // Gone at once, not when the pointer next crosses it.
-                    with_app(App::hide_icon);
-                    close_window();
-                } else if by_user {
-                    dialog(|| ui::alert(&message));
-                }
-            }
-        }
-        Event::Lan(Ok(reply)) => {
-            with_app(|app| app.model.lan = Some(reply.lan));
-            if reply.restart_needed {
-                with_app(|app| app.start(Job::Restarting, true, false));
-            }
-        }
-        Event::Encoder(Ok(choice)) => {
-            with_app(|app| app.model.encoder = Some(choice));
-        }
-        Event::Lan(Err(message)) | Event::Encoder(Err(message)) | Event::Engine(Err(message)) => {
-            dialog(|| ui::alert(&message));
-        }
-        Event::Engine(Ok(())) => {
-            with_app(App::check_health);
-        }
-        Event::Checked(result) => {
-            with_app(|app| app.checked(result));
-        }
-        // The installer takes over from here and closes this tray.
-        Event::Install(Ok(())) => {}
-        Event::Install(Err(message)) => {
-            with_app(|app| {
-                app.model.updating_since = None;
-                app.refresh_tip();
-                app.notify("Portal could not update", &message, true);
-            });
-        }
-        Event::Stopped(result) => {
-            if let Err(message) = result {
-                dialog(|| ui::alert(&message));
-            }
-            close_window();
-        }
-    }
-}
-
-/// Removes the icon and ends the message loop; the service keeps running.
-fn exit_quietly() {
-    with_app(App::hide_icon);
-    close_window();
-}
-
-fn close_window() {
-    let Some(hwnd) = with_app(|app| app.hwnd) else {
-        return;
-    };
-    // SAFETY: our own window, destroyed from its thread. WM_DESTROY (sent
-    // synchronously) posts the quit message; the state is not borrowed here.
-    unsafe {
-        KillTimer(hwnd, HEALTH_TIMER);
-        DestroyWindow(hwnd);
-    }
-}
-
-impl App {
-    /// Starts (or restarts) the service on a worker thread.
-    fn start(&mut self, job: Job, by_user: bool, first: bool) {
-        if self.model.job.is_some() {
+    fn on_tray(&self, event: TrayEvent) {
+        if self.0.dialogs.get() > 0 {
             return;
         }
-        self.model.job = Some(job);
-        let port = self.model.port;
-        self.poster.spawn(move || Event::Started {
+        match event {
+            TrayEvent::Activate => {
+                let now = Instant::now();
+                let fresh = self
+                    .0
+                    .last_open
+                    .get()
+                    .is_none_or(|at| now.duration_since(at) >= OPEN_DEBOUNCE);
+                self.0.last_open.set(Some(now));
+                if fresh {
+                    self.command(Cmd::Open);
+                }
+            }
+            TrayEvent::Menu(id) => {
+                if let Some(cmd) = Cmd::from_id(id) {
+                    self.command(cmd);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A later launch's arguments: `--stop` quits Portal and answers 0 once the service
+    /// stopped (1 when it would not); `--restart-server` restarts it; anything else opens
+    /// the dashboard unless `--no-browser`.
+    fn on_launch(&self, args: &[String]) -> InstanceReply {
+        let flag = |name: &str| args.iter().any(|arg| arg == name);
+        if flag("--stop") {
+            let (reply, later) = InstanceReply::later();
+            self.0
+                .stop_replies
+                .borrow_mut()
+                .push((later, flag("--quiet")));
+            self.quit();
+            return reply;
+        }
+        if flag("--restart-server") {
+            // The dashboard asks first, so the tray does not ask again.
+            self.begin(Job::Restarting, true, false);
+        } else if !flag("--no-browser") {
+            self.command(Cmd::Open);
+        }
+        InstanceReply::code(0)
+    }
+
+    /// Asks `spec`; `yes` runs only when the answer is yes.
+    fn ask(&self, spec: ConfirmSpec, yes: impl FnOnce(&Tray) + 'static) {
+        let t = self.clone();
+        self.0.dialogs.set(self.0.dialogs.get() + 1);
+        self.0.app.confirm(spec, move |answer| {
+            t.0.dialogs.set(t.0.dialogs.get().saturating_sub(1));
+            if answer {
+                yes(&t);
+            }
+        });
+    }
+
+    fn alert(&self, message: &str) {
+        self.ask(ui::notice(message), |_| {});
+    }
+
+    /// Runs a menu command. Questions are asked first, as on the dashboard: nothing changes
+    /// when the answer is no.
+    pub fn command(&self, cmd: Cmd) {
+        match cmd {
+            Cmd::Open => self.open_page(service::dashboard_url),
+            Cmd::OpenServerPage => self.open_page(service::server_page_url),
+            Cmd::OpenLogs => {
+                let dir = service::log_dir();
+                let _ = std::fs::create_dir_all(&dir);
+                let log = dir.join("portal.log");
+                // The folder opens with the log selected (the folder itself when there is none).
+                let target = if log.is_file() { log } else { dir };
+                if let Err(err) = remedy_ui::desktop::reveal(&target) {
+                    self.alert(&format!("Portal could not open its log folder ({err})."));
+                }
+            }
+            Cmd::ToggleAutostart => {
+                let next = !autostart::enabled();
+                match autostart::set(next) {
+                    Ok(()) => {
+                        self.0.model.borrow_mut().autostart = next;
+                        self.changed();
+                    }
+                    Err(message) => self.alert(&message),
+                }
+            }
+            Cmd::ToggleLan => self.ask(ui::question(LAN_TEXT), Tray::toggle_lan),
+            Cmd::ToggleEncoder => self.toggle_encoder(),
+            Cmd::RestartEngine => self.restart_engine(),
+            Cmd::StartServer => self.begin(Job::Starting, true, false),
+            Cmd::RestartServer => self.ask(ui::question(RESTART_TEXT), |t| {
+                t.begin(Job::Restarting, true, false);
+            }),
+            Cmd::CheckUpdates => self.check_updates(),
+            Cmd::InstallUpdate => {
+                let Some(version) = self.model().offered_update().map(str::to_string) else {
+                    return;
+                };
+                let question = format!(
+                    "Install Portal {version}?\n\n\
+                     Portal will close, update, and reopen. Anything playing will stop."
+                );
+                self.ask(ui::question(&question), Tray::install_update);
+            }
+            Cmd::Quit => self.ask(ui::question(QUIT_TEXT), Tray::quit),
+        }
+    }
+
+    /// Opens a dashboard page, starting the service first when it is down.
+    fn open_page(&self, url: fn(u16) -> String) {
+        let (target, quitting, job, state) = {
+            let m = self.model();
+            (url(m.port), m.quitting(), m.job, m.service)
+        };
+        if quitting {
+            return;
+        }
+        match (job, state) {
+            (Some(_), _) => *self.0.pending_open.borrow_mut() = Some(target),
+            (None, Service::Running) => self.open(&target),
+            (None, Service::PortTaken) => {
+                let port = self.model().port;
+                self.alert(&service::port_taken_message(port));
+            }
+            (None, Service::Stopped | Service::Unknown) => {
+                *self.0.pending_open.borrow_mut() = Some(target);
+                self.begin(Job::Starting, true, false);
+            }
+        }
+    }
+
+    /// Opens `url` in the default browser.
+    fn open(&self, url: &str) {
+        self.0.app.open_url(url, |_| {});
+    }
+
+    /// Runs `work` in the background and handles what it returns.
+    fn spawn(&self, work: impl FnOnce() -> Event + Send + 'static) {
+        let t = self.clone();
+        self.0.app.background(work, move |event| t.handle(event));
+    }
+
+    /// Starts (or restarts) the service in the background.
+    fn begin(&self, job: Job, by_user: bool, first: bool) {
+        {
+            let mut m = self.0.model.borrow_mut();
+            if m.job.is_some() {
+                return;
+            }
+            m.job = Some(job);
+        }
+        let port = self.model().port;
+        self.spawn(move || Event::Started {
             result: match job {
                 Job::Restarting => service::restart(port),
                 _ => service::ensure_running(port),
@@ -737,87 +316,171 @@ impl App {
             by_user,
             first,
         });
-        self.refresh_tip();
+        self.changed();
     }
 
-    fn check_health(&mut self) {
-        if !self.icon_shown && !self.model.quitting() {
-            // Explorer was not ready yet (early at sign-in).
-            self.show_icon();
-        }
-        if self.health_pending || self.model.job.is_some() {
+    fn check_health(&self) {
+        if self.0.health_pending.get() || self.model().job.is_some() {
             return;
         }
-        self.health_pending = true;
-        let port = self.model.port;
-        self.poster
-            .spawn(move || Event::Health(service::health(port)));
+        self.0.health_pending.set(true);
+        let port = self.model().port;
+        self.spawn(move || Event::Health(service::health(port)));
     }
 
-    fn toggle_lan(&mut self) {
-        let Some(lan) = self.model.lan else {
+    fn toggle_lan(&self) {
+        let (Some(lan), port) = (self.model().lan, self.model().port) else {
             return;
         };
-        let port = self.model.port;
-        self.poster
-            .spawn(move || Event::Lan(service::set_lan(port, !lan)));
+        self.spawn(move || Event::Lan(service::set_lan(port, !lan)));
     }
 
     /// Takes effect with the next video started, like the dashboard's menu.
-    fn toggle_encoder(&mut self) {
-        let Some(hardware) = self.model.encoder.as_ref().map(|e| e.hardware) else {
+    fn toggle_encoder(&self) {
+        let hardware = self.model().encoder.as_ref().map(|e| e.hardware);
+        let (Some(hardware), port) = (hardware, self.model().port) else {
             return;
         };
-        let port = self.model.port;
-        self.poster
-            .spawn(move || Event::Encoder(service::set_encoder(port, !hardware)));
+        self.spawn(move || Event::Encoder(service::set_encoder(port, !hardware)));
     }
 
-    fn restart_engine(&mut self) {
-        let port = self.model.port;
-        self.poster
-            .spawn(move || Event::Engine(service::restart_engine(port)));
+    fn restart_engine(&self) {
+        let port = self.model().port;
+        self.spawn(move || Event::Engine(service::restart_engine(port)));
     }
 
-    fn check_updates(&mut self) {
-        let port = self.model.port;
-        self.poster
-            .spawn(move || Event::Checked(service::check_update(port)));
+    fn check_updates(&self) {
+        let port = self.model().port;
+        self.spawn(move || Event::Checked(service::check_update(port)));
     }
 
-    fn install_update(&mut self) {
-        self.model.updating_since = Some(Instant::now());
-        self.refresh_tip();
-        let port = self.model.port;
-        self.poster
-            .spawn(move || Event::Install(service::install_update(port)));
+    fn install_update(&self) {
+        self.0.model.borrow_mut().updating_since = Some(Instant::now());
+        self.changed();
+        let port = self.model().port;
+        self.spawn(move || Event::Install(service::install_update(port)));
     }
 
-    /// Stops the service, then ends the tray. A start in flight finishes
-    /// first, so the service it may bring up is stopped too.
-    fn quit(&mut self) {
-        let now = self.model.quit();
+    /// Stops the service, then ends the tray. A start in flight finishes first, so the
+    /// service it may bring up is stopped too.
+    pub fn quit(&self) {
+        let now = self.0.model.borrow_mut().quit();
         self.hide_icon();
         if now {
             self.stop();
         }
     }
 
-    fn stop(&mut self) {
-        let port = self.model.port;
-        self.poster
-            .spawn(move || Event::Stopped(service::shutdown(port)));
+    fn stop(&self) {
+        let port = self.model().port;
+        self.spawn(move || Event::Stopped(service::shutdown(port)));
     }
 
-    fn react(&mut self, reaction: Reaction) {
+    /// Ends the app with `code`.
+    fn exit(&self, code: i32) {
+        self.0.exit_code.set(code);
+        self.hide_icon();
+        self.0.app.quit();
+    }
+
+    fn handle(&self, event: Event) {
+        match event {
+            Event::Health(health) => {
+                self.0.health_pending.set(false);
+                let reactions = self.0.model.borrow_mut().on_health(health, Instant::now());
+                self.changed();
+                for reaction in reactions {
+                    self.react(reaction);
+                }
+            }
+            Event::Started {
+                result,
+                by_user,
+                first,
+            } => {
+                let quit = self.0.model.borrow_mut().started(result.is_ok(), by_user);
+                if quit {
+                    // Quit was chosen while starting: stop what just started.
+                    *self.0.pending_open.borrow_mut() = None;
+                    self.stop();
+                    return;
+                }
+                self.changed();
+                let open = self.0.pending_open.borrow_mut().take();
+                if result.is_ok() {
+                    if first {
+                        self.introduce();
+                    }
+                    self.check_health();
+                    if let Some(target) = open {
+                        self.open(&target);
+                    }
+                }
+                if let Err(message) = result {
+                    if first {
+                        // Gone at once; the process ends with an error once it is read.
+                        self.hide_icon();
+                        let t = self.clone();
+                        self.0.app.confirm(ui::notice(&message), move |_| t.exit(1));
+                    } else if by_user {
+                        self.alert(&message);
+                    }
+                }
+            }
+            Event::Lan(Ok(reply)) => {
+                self.0.model.borrow_mut().lan = Some(reply.lan);
+                self.changed();
+                if reply.restart_needed {
+                    self.begin(Job::Restarting, true, false);
+                }
+            }
+            Event::Encoder(Ok(choice)) => {
+                self.0.model.borrow_mut().encoder = Some(choice);
+                self.changed();
+            }
+            Event::Lan(Err(message))
+            | Event::Encoder(Err(message))
+            | Event::Engine(Err(message)) => {
+                self.alert(&message);
+            }
+            Event::Engine(Ok(())) => self.check_health(),
+            Event::Checked(result) => self.checked(result),
+            // The installer takes over from here and closes this tray.
+            Event::Install(Ok(())) => {}
+            Event::Install(Err(message)) => {
+                self.0.model.borrow_mut().updating_since = None;
+                self.changed();
+                self.notify("Portal could not update", &message, true);
+            }
+            Event::Stopped(result) => {
+                let code = i32::from(result.is_err());
+                let replies = std::mem::take(&mut *self.0.stop_replies.borrow_mut());
+                let quiet = !replies.is_empty() && replies.iter().all(|(_, quiet)| *quiet);
+                for (reply, _) in replies {
+                    reply.send(code);
+                }
+                match result {
+                    Err(message) if !quiet => {
+                        let t = self.clone();
+                        self.0
+                            .app
+                            .confirm(ui::notice(&message), move |_| t.exit(code));
+                    }
+                    _ => self.exit(code),
+                }
+            }
+        }
+    }
+
+    fn react(&self, reaction: Reaction) {
         match reaction {
-            Reaction::AutoRestart => self.start(Job::Starting, false, false),
+            Reaction::AutoRestart => self.begin(Job::Starting, false, false),
             Reaction::RestartHung {
                 pid,
                 misses,
                 silent,
             } => {
-                if self.model.job.is_some() {
+                if self.model().job.is_some() {
                     return;
                 }
                 let process = pid.map_or_else(|| "pid unknown".to_string(), |pid| pid.to_string());
@@ -826,9 +489,9 @@ impl App {
                      {}s; ending it and starting it again.",
                     silent.as_secs()
                 ));
-                self.model.job = Some(Job::Restarting);
-                let port = self.model.port;
-                self.poster.spawn(move || {
+                self.0.model.borrow_mut().job = Some(Job::Restarting);
+                let port = self.model().port;
+                self.spawn(move || {
                     let result = service::restart_hung(port, pid);
                     if let Err(message) = &result {
                         service::note(&format!("restarting the hung Portal failed: {message}"));
@@ -839,12 +502,15 @@ impl App {
                         first: false,
                     }
                 });
-                self.refresh_tip();
+                self.changed();
             }
             Reaction::GaveUp => self.notify(
                 "Portal's server keeps stopping",
-                "Portal stopped restarting it. Right-click the Portal icon to start it again. \
-                 The log is in %LOCALAPPDATA%\\Portal\\logs.",
+                &format!(
+                    "Portal stopped restarting it. Right-click the Portal icon to start it again. \
+                     The log is in {}.",
+                    log_place()
+                ),
                 true,
             ),
             Reaction::UpdateAvailable(version) => self.notify(
@@ -856,7 +522,7 @@ impl App {
         }
     }
 
-    fn checked(&mut self, result: Result<Update, String>) {
+    fn checked(&self, result: Result<Update, String>) {
         match result {
             Ok(update) if update.state == "failed" => {
                 let error = update
@@ -869,10 +535,10 @@ impl App {
                 let current = update.current.clone();
                 // A newer release without a Windows installer comes with a note.
                 let note = update.error.clone();
-                self.model.update = Some(update);
+                self.0.model.borrow_mut().update = Some(update);
                 match (offered, note) {
                     (Some(version), _) => {
-                        self.model.announced(&version);
+                        self.0.model.borrow_mut().announced(&version);
                         self.notify(
                             &format!("Portal {version} is available"),
                             UPDATE_HINT,
@@ -886,14 +552,14 @@ impl App {
                         false,
                     ),
                 }
-                self.refresh_tip();
+                self.changed();
             }
             Err(message) => self.notify("Portal could not check for updates", &message, true),
         }
     }
 
     /// The first time ever, says where Portal went.
-    fn introduce(&mut self) {
+    fn introduce(&self) {
         let marker = service::data_dir().join(INTRO_MARKER);
         if marker.exists() {
             return;
@@ -907,65 +573,61 @@ impl App {
         let _ = std::fs::write(marker, b"");
     }
 
-    fn icon_data(&self) -> NOTIFYICONDATAW {
-        // SAFETY: NOTIFYICONDATAW is plain data; all-zero is a valid start.
-        let mut data: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
-        data.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        data.hWnd = self.hwnd;
-        data.uID = ICON_ID;
-        data
-    }
-
-    fn show_icon(&mut self) {
-        let mut data = self.icon_data();
-        data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
-        data.uCallbackMessage = WM_TRAY;
-        data.hIcon = self.icon;
-        fill_wide(&mut data.szTip, &self.model.tooltip());
-        // SAFETY: data is fully initialised and outlives the calls.
-        unsafe {
-            if Shell_NotifyIconW(NIM_ADD, &data) == 0 {
-                // Explorer is not ready; the health timer tries again.
-                return;
-            }
-            data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-            Shell_NotifyIconW(NIM_SETVERSION, &data);
-        }
-        self.icon_shown = true;
-    }
-
-    fn hide_icon(&mut self) {
-        if !self.icon_shown {
-            return;
-        }
-        let data = self.icon_data();
-        // SAFETY: data identifies our icon and outlives the call.
-        unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
-        self.icon_shown = false;
-    }
-
-    fn refresh_tip(&mut self) {
-        if !self.icon_shown {
-            return;
-        }
-        let mut data = self.icon_data();
-        data.uFlags = NIF_TIP | NIF_SHOWTIP;
-        fill_wide(&mut data.szTip, &self.model.tooltip());
-        // SAFETY: data identifies our icon and outlives the call.
-        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
-    }
-
-    /// A Windows notification from the tray icon.
-    fn notify(&mut self, title: &str, text: &str, warning: bool) {
-        if !self.icon_shown {
-            return;
-        }
-        let mut data = self.icon_data();
-        data.uFlags = NIF_INFO;
-        fill_wide(&mut data.szInfoTitle, title);
-        fill_wide(&mut data.szInfo, text);
-        data.dwInfoFlags = if warning { NIIF_WARNING } else { NIIF_INFO };
-        // SAFETY: data identifies our icon and outlives the call.
-        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
+    /// A system notification from Portal; warnings are marked as such.
+    fn notify(&self, title: &str, text: &str, warning: bool) {
+        let id = self.0.next_notice.get();
+        self.0.next_notice.set(id + 1);
+        let urgency = if warning {
+            Urgency::Warning
+        } else {
+            Urgency::Info
+        };
+        self.0
+            .app
+            .notify(Notification::new(id, title, text).urgency(urgency), |_| {});
     }
 }
+
+/// Where the log is, as the notification names it.
+fn log_place() -> String {
+    if cfg!(windows) {
+        r"%LOCALAPPDATA%\Portal\logs".to_string()
+    } else {
+        service::log_dir().display().to_string()
+    }
+}
+
+/// A tray label as written: `&` is not an access key here.
+fn label(text: &str) -> String {
+    text.replace('&', "&&")
+}
+
+/// The model's menu as the engine's tray items, word for word.
+pub fn tray_items(entries: &[Entry]) -> Vec<TrayItem> {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            Entry::Separator => TrayItem::Separator,
+            Entry::Submenu(text, inner) => TrayItem::Submenu {
+                label: label(text),
+                items: tray_items(inner),
+            },
+            Entry::Item(item) if item.checkable => TrayItem::Check {
+                id: item.cmd.map_or(0, Cmd::id),
+                label: label(&item.label),
+                enabled: item.enabled,
+                checked: item.checked,
+            },
+            Entry::Item(item) => TrayItem::Item {
+                id: item.cmd.map_or(0, Cmd::id),
+                label: label(&item.label),
+                enabled: item.enabled,
+                default: item.default,
+            },
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "../../../tests-private/launcher/src/tray.rs"]
+mod tests;
