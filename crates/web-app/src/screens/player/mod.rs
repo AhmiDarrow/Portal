@@ -56,6 +56,8 @@ pub const UP_NEXT_LEAD: Duration = Duration::from_secs(20);
 pub const EARLY_LEAD: f64 = 60.0;
 /// How near the end the job is asked for a next season found after it started.
 pub const NEXT_LOOKUP: f64 = 90.0;
+/// How long the browser may take to fill the screen before the request counts as refused.
+pub const FULLSCREEN_WAIT: Duration = Duration::from_millis(1500);
 /// A wait for video this long asks the job whether its stream died.
 pub const STALL: Duration = Duration::from_secs(8);
 
@@ -439,7 +441,23 @@ impl Dock {
         let w2 = with.clone();
         p.on_theater(move |on| w2(&|d| d.set_theater(on)));
         let win = self.0.ctx.window.clone();
-        p.on_fullscreen(move |on| win.set_fullscreen(on));
+        let (w2, pf) = (with.clone(), p.clone());
+        p.on_fullscreen(move |on| {
+            win.set_fullscreen(on);
+            if !on {
+                return;
+            }
+            // A browser that refuses (no press behind the request) leaves the page as it was.
+            let (win2, pf2) = (win.clone(), pf.clone());
+            w2(&move |d| {
+                let (win3, pf3) = (win2.clone(), pf2.clone());
+                d.after(FULLSCREEN_WAIT, move |_| {
+                    if !untrack(|| win3.is_fullscreen()) && untrack(|| pf3.is_fullscreen()) {
+                        pf3.request_fullscreen(false);
+                    }
+                });
+            });
+        });
         // The browser's own Escape leaves full screen without the player asking.
         let (w2, win) = (with.clone(), self.0.ctx.window.clone());
         let root = self.0.ui.root();
