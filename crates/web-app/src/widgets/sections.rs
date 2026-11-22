@@ -22,10 +22,8 @@ pub fn card(ui: &Ui, label: &str) -> El {
     ui.el("p_server_card")
         .column()
         .fill_width()
-        .layout(|l| {
-            l.margin.top = 8.8;
-            l.margin.bottom = 8.8;
-        })
+        // `margin: 0.55rem 0`, collapsed between cards: 0.55rem apart.
+        .layout(|l| l.margin.top = 8.8)
         .semantics(Semantics::new(Role::Region).label(label.to_owned()))
 }
 
@@ -61,7 +59,8 @@ pub fn cat_button(ui: &Ui, label: &str, current: bool, on_press: impl Fn() + 'st
 
 /// `.jump-bar`: buttons that scroll to the page's sections.
 pub fn jump_bar(ui: &Ui, phone: bool, sections: &[(&str, El)]) -> El {
-    let mut row = cats(ui, "Sections", true, phone).layout(|l| l.margin.bottom = 9.6);
+    // 0.6rem under it, collapsed with the first card's 0.55rem.
+    let mut row = cats(ui, "Sections", true, phone).layout(|l| l.margin.bottom = 0.8);
     for (name, target) in sections {
         let t = target.clone();
         row = row.child(crate::widgets::button(ui, (*name).to_owned(), move || t.scroll_into_view()).variant("jump").layout(|l| l.shrink = 0.0));
@@ -110,7 +109,12 @@ pub fn toggle(ui: &Ui, label: &str, on: Signal<bool>, enabled: bool, on_flip: im
 
 /// A drop-down in Portal's look (`select`): the well, a hairline, 8 px corners.
 pub fn select(ui: &Ui, label: &str, options: Vec<String>, chosen: Signal<usize>) -> El {
-    w::select(ui, label.to_owned(), options, chosen).variant("p_select")
+    // The chosen option at the start, the arrow at the end, as a `select` draws them.
+    let s = w::select(ui, label.to_owned(), options, chosen).variant("p_select");
+    if let Some(value) = ui.tree().children(s.id()).first() {
+        let _ = ui.element(*value).layout(|l| l.grow = 1.0);
+    }
+    s
 }
 
 /// Repaints `root` with `paint` and puts focus back on the control in the same place
