@@ -112,8 +112,14 @@ fn page(ui: &Ui, ctx: &Ctx) -> El {
         .column()
         .grow(1.0)
         .fill_width()
+        // Exactly the window's height, so the page's own scroll is what scrolls (and can be
+        // scrolled from code); no wrapper may grow with its content.
+        .layout(|l| {
+            l.height = Length::Percent(1.0);
+            l.min_height = Length::Px(0.0);
+        })
         .child(show(ui, move || pair.get() || me.with(|m| m.as_ref().is_some_and(|m| !m.paired)), move || screens::pairing::view(&u1, &c1)).el().fill_width())
-        .child(show(ui, move || !pair.get() && me.with(|m| m.as_ref().is_some_and(|m| m.paired)), move || routed(&u2, &c2)).el().grow(1.0).fill_width())
+        .child(show(ui, move || !pair.get() && me.with(|m| m.as_ref().is_some_and(|m| m.paired)), move || routed(&u2, &c2)).el().grow(1.0).fill_width().layout(|l| l.min_height = Length::Px(0.0)))
 }
 
 fn routed(ui: &Ui, ctx: &Ctx) -> El {
@@ -168,7 +174,12 @@ fn routed(ui: &Ui, ctx: &Ctx) -> El {
         .child(main)
         // body { padding-bottom: 2rem }
         .child(w::column(ui).height(32.0).layout(|l| l.shrink = 0.0));
-    w::column(ui).grow(1.0).fill_width().child(scroll).child(screens::player::view(ui, ctx))
+    w::column(ui)
+        .grow(1.0)
+        .fill_width()
+        .layout(|l| l.min_height = Length::Px(0.0))
+        .child(scroll)
+        .child(screens::player::view(ui, ctx))
 }
 
 /// "Skip to content": off the top until it has focus; it moves focus to `main`.
