@@ -29,6 +29,39 @@ use watch::{DeviceRef, DeviceState, Update, Watched};
 const DISCOVER_LIMIT: Duration = Duration::from_secs(30);
 const CONTROL_LIMIT: Duration = Duration::from_secs(45);
 
+/// How long a seek waits for the TV to say it is at the new place before Portal answers
+/// that the seek was sent, by default. A far seek on a whole-title cast has the TV ask for
+/// a part Portal is still encoding, so the TV can take longer than this; it keeps loading
+/// and the watch follows it. `PORTAL_CAST_SEEK_WAIT` (seconds) or [`set_seek_answer_wait`]
+/// changes it.
+pub const SEEK_ANSWER_WAIT: Duration = Duration::from_secs(20);
+/// 0: not set yet (the environment, else the default).
+static SEEK_ANSWER_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Sets how long a seek waits for the TV's answer ([`SEEK_ANSWER_WAIT`]).
+// The server sets it through the environment; the setter is for code that builds one.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn set_seek_answer_wait(wait: Duration) {
+    let ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX).max(1);
+    SEEK_ANSWER_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How long a seek waits for the TV's answer.
+pub fn seek_answer_wait() -> Duration {
+    let ms = SEEK_ANSWER_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if ms > 0 {
+        return Duration::from_millis(ms);
+    }
+    let wait = std::env::var("PORTAL_CAST_SEEK_WAIT")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .and_then(|s| Duration::try_from_secs_f64(s).ok())
+        .unwrap_or(SEEK_ANSWER_WAIT);
+    set_seek_answer_wait(wait);
+    wait
+}
+
 /// A scan this recent answers the next ask too.
 const DISCOVERY_REUSE: Duration = Duration::from_secs(10);
 /// A failed scan answers tabs that waited on it for this long, so they do
@@ -1645,8 +1678,17 @@ async fn device_control(
 ) -> Result<Json<portal_api::OkBody>, super::ApiError> {
     let id = clean_id(id).map_err(|msg| super::fail(StatusCode::BAD_REQUEST, msg))?;
     let endpoint = lock_cast(state).device_endpoint(&id);
-    let args = control_args(command, &id, endpoint.as_ref(), seconds);
-    run_agent(args, CONTROL_LIMIT).await.map_err(agent_error)?;
+    let mut args = control_args(command, &id, endpoint.as_ref(), seconds);
+    let mut limit = CONTROL_LIMIT;
+    if command == "seek" {
+        // The helper waits this long for the TV's answer, then says the seek was sent.
+        let wait = seek_answer_wait();
+        if let Some(at) = args.iter().position(|a| a == "--timeout") {
+            args[at + 1] = format!("{:.3}", wait.as_secs_f64());
+        }
+        limit = limit.max(wait.saturating_add(CONTROL_LIMIT));
+    }
+    run_agent(args, limit).await.map_err(agent_error)?;
     Ok(Json(portal_api::OkBody { ok: true }))
 }
 

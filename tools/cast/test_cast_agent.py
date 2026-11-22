@@ -1,4 +1,5 @@
-"""The watch's reaction to TV state changes, in both one-shot and serving mode.
+"""The watch's reaction to TV state changes, in both one-shot and serving mode, and a
+seek the TV answers late.
 
 Run: python -m unittest discover -s tools/cast
 """
@@ -85,6 +86,47 @@ class WatchTest(unittest.TestCase):
         self.assertFalse(thread.is_alive())
         # The kept connection carries no listener from the finished watch.
         self.assertEqual(self.cast.media_controller._status_listeners, [])
+
+
+class RequestTimeout(Exception):
+    """Stands in for pychromecast.error.RequestTimeout (matched by name)."""
+
+
+class SlowSeekMedia:
+    def __init__(self, state: str) -> None:
+        self.status = SimpleNamespace(player_state=state, media_session_id=1, content_id="http://x/cast.mp4", duration=2500.0)
+        self.calls: list = []
+
+    def seek(self, position, timeout=10.0) -> None:
+        self.calls.append(("seek", position, timeout))
+        raise RequestTimeout(f"seek {position}")
+
+    def pause(self, timeout=10.0) -> None:
+        self.calls.append(("pause", timeout))
+
+
+class SeekTest(unittest.TestCase):
+    def run_seek(self, state: str):
+        cast = SimpleNamespace(media_controller=SlowSeekMedia(state))
+        rows: list = []
+        old = cast_agent.write_line
+        cast_agent.write_line = rows.append
+        try:
+            with self.assertRaises(SystemExit) as end:
+                cast_agent.do_seek(cast, 2450.0, 20.0)
+        finally:
+            cast_agent.write_line = old
+        return end.exception.code, rows, cast.media_controller.calls
+
+    def test_a_seek_the_tv_answers_late_was_still_sent(self) -> None:
+        code, rows, calls = self.run_seek("PLAYING")
+        self.assertEqual(code, 0)
+        self.assertEqual(rows, [{"ok": True, "answered": False}])
+        self.assertEqual(calls, [("seek", 2450.0, 20.0)])
+
+    def test_slow_answers_keep_the_connection(self) -> None:
+        self.assertTrue(cast_agent.timed_out(RequestTimeout("x")))
+        self.assertFalse(cast_agent.timed_out(OSError("x")))
 
 
 if __name__ == "__main__":

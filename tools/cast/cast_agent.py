@@ -563,6 +563,12 @@ def do_subtitles(cast: Any, subtitles: tuple[str, str] | None, timeout: float) -
     emit({"ok": True})
 
 
+def timed_out(exc: BaseException) -> bool:
+    """pychromecast's RequestTimeout: the TV did not answer a media command in time. The
+    command went out and the connection is fine; a TV loading a new place answers late."""
+    return exc.__class__.__name__ == "RequestTimeout"
+
+
 def do_seek(cast: Any, seconds: float, timeout: float) -> None:
     mc = media_controller(cast, timeout)
     status = getattr(mc, "status", None)
@@ -572,13 +578,22 @@ def do_seek(cast: Any, seconds: float, timeout: float) -> None:
         # A playlist loaded while still growing plays as live and ignores
         # seeks, so load it again at the new time.
         reload_at(mc, status, url, seconds, active_subtitles(status))
-    else:
-        paused = player_state_of(status) == "PAUSED"
-        mc.seek(seconds)
+        emit({"ok": True})
+    paused = player_state_of(status) == "PAUSED"
+    # A far seek on a whole-title cast has the TV ask for a part Portal is still
+    # encoding; it answers once it is there, which can take longer than `timeout`.
+    # The seek was sent and the TV keeps loading, so that is not a failure.
+    answered = True
+    try:
+        mc.seek(seconds, timeout=max(timeout, 1.0))
         if paused:
             # A seek always asks the receiver to resume, so pause it again.
-            mc.pause()
-    emit({"ok": True})
+            mc.pause(timeout=max(timeout, 1.0))
+    except Exception as exc:
+        if not timed_out(exc):
+            raise
+        answered = False
+    emit({"ok": True, "answered": answered})
 
 
 def do_volume(cast: Any, level: float | None, muted: bool | None) -> None:
@@ -974,9 +989,11 @@ def run(argv: list[str]) -> None:
                 fail("Unknown cast command.", "bad_request")
         except SystemExit:
             raise
-        except Exception:
-            if SERVING:
+        except Exception as exc:
+            if SERVING and not timed_out(exc):
                 # A connection that threw may be broken; the next command connects again.
+                # A TV slow to answer is still connected, and the watch uses the same
+                # connection: dropping it would end the cast.
                 forget_cast(device_id)
             raise
         finally:

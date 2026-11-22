@@ -1229,3 +1229,14 @@ async fn a_job_with_no_whole_title_stream_is_cast_as_a_file() {
     assert_eq!((same.as_str(), start), (url, 12.0));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn seek_answer_wait_has_a_default_and_a_setter() {
+    assert_eq!(SEEK_ANSWER_WAIT, Duration::from_secs(20));
+    set_seek_answer_wait(Duration::from_secs(90));
+    assert_eq!(seek_answer_wait(), Duration::from_secs(90));
+    // No cap: a long wait is kept as given.
+    set_seek_answer_wait(Duration::from_secs(3600));
+    assert_eq!(seek_answer_wait(), Duration::from_secs(3600));
+    set_seek_answer_wait(SEEK_ANSWER_WAIT);
+}
