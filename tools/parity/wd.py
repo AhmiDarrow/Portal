@@ -153,10 +153,12 @@ class Browser:
             raise WebDriverError(f"{url} did not load in the frame (framing refused?)")
 
     def wait_drawn(self, timeout: float) -> bool:
-        """Waits until a RemedyUI page has made its window (`[data-remedy-window]`)."""
+        """Waits until a RemedyUI page has made its window (`[data-remedy-window]`) and its
+        accessibility mirror has content (the app built its first page, not just a canvas)."""
         end = time.monotonic() + timeout
         while time.monotonic() < end:
-            if self.js("return !!document.querySelector('[data-remedy-window]')"):
+            if self.js("return !!document.querySelector('[data-remedy-window]') && "
+                       "document.querySelectorAll('[data-remedy-a11y] [data-node]').length > 0"):
                 return True
             time.sleep(0.25)
         return False

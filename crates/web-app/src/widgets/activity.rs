@@ -302,7 +302,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
             .padding(pad(14.4, 16.0))
             .shadow(k.shadow),
     );
-    s.rule("p_activity_title", None, States::NONE, StylePatch::default().heading(true).text_size(16.0).foreground(k.text));
+    s.rule("p_activity_title", None, States::NONE, StylePatch::default().heading(true).text_size(16.0).foreground(k.text).line_height(remedy_ui::style::LineHeight::Relative(1.25)));
     s.rule(
         "p_activity_percent",
         None,
