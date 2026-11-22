@@ -6,7 +6,7 @@
 
 use remedy_ui::core::Insets;
 use remedy_ui::image::{image_ext, Fit, ImageOptions, ImageState, Source};
-use remedy_ui::layout::{Align, Justify, Length};
+use remedy_ui::layout::{Align, Justify, Length, Position, AUTO};
 use remedy_ui::reactive::Signal;
 use remedy_ui::style::{States, StylePatch, StyleSheet};
 use remedy_ui::{El, Ui};
@@ -146,26 +146,36 @@ pub fn art(ui: &Ui, art: Option<&str>, name: &str, variant: &'static str) -> El 
             })
         }
     };
-    // The frame's height follows its width (CSS `aspect-ratio` on the border box, the
-    // hairline included), set from the measured width so the inner box is definite.
-    let i2 = inner.clone();
+    // The frame keeps its aspect ratio (CSS `aspect-ratio` on the border box, the hairline
+    // included); the picture box and the hairline are laid over it, so nothing inside feeds
+    // back into its size.
     let line = if rule { 1.0 } else { 0.0 };
-    let inner = inner.layout(|l| l.shrink = 0.0).bind(move || {
-        let w = width.get();
-        let f = frame.get();
-        let pad = if f == Frame::Square { w * 0.18 } else { 0.0 };
-        let h = (w / f.aspect() - line).max(0.0);
-        let _ = i2.clone().padding(Insets::all(pad)).layout(move |l| {
-            l.grow = 0.0;
-            l.height = Length::Px(h);
-        });
+    let inner = inner.layout(move |l| {
+        l.position = Position::Absolute;
+        l.inset = Insets { top: 0.0, start: 0.0, end: 0.0, bottom: line };
+        l.grow = 0.0;
     });
-    let mut outer = ui.el("p_art_frame").column().fill_width().child(inner);
+    // A square picture is inset by 18% of the width (`padding: 18%`).
+    let i2 = inner.clone();
+    let inner = inner.bind(move || {
+        let pad = if frame.get() == Frame::Square { width.get() * 0.18 } else { 0.0 };
+        let _ = i2.clone().padding(Insets::all(pad));
+    });
+    let mut outer = ui.el("p_art_frame").fill_width().layout(|l| l.position = Position::Relative).child(inner);
     if rule {
-        outer = outer.child(ui.el("p_art_rule").fill_width().height(1.0).layout(|l| l.shrink = 0.0));
+        outer = outer.child(ui.el("p_art_rule").height(1.0).layout(|l| {
+            l.position = Position::Absolute;
+            l.inset = Insets { top: AUTO, start: 0.0, end: 0.0, bottom: 0.0 };
+        }));
     }
+    let o2 = outer.clone();
+    let outer = outer.bind(move || {
+        let a = frame.get().aspect();
+        let _ = o2.clone().layout(move |l| l.aspect_ratio = Some(a));
+    });
     outer.on_resize(move |s| {
-        if width.get_untracked().ok() != Some(s.width) {
+        // The inset of a square picture follows the width; it does not change the frame's size.
+        if width.get_untracked().is_ok_and(|w| (w - s.width).abs() > 0.5) {
             width.set(s.width);
         }
     })
