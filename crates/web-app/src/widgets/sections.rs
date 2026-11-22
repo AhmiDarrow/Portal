@@ -8,7 +8,7 @@ use std::rc::Rc;
 use remedy_ui::a11y::{Action, Role, Semantics};
 use remedy_ui::core::{CornerRadii, Insets, Rect};
 use remedy_ui::input::Key;
-use remedy_ui::layout::Length;
+use remedy_ui::layout::{Justify, Length};
 use remedy_ui::paint::Brush;
 use remedy_ui::reactive::{untrack, Signal};
 use remedy_ui::style::{States, StylePatch, StyleSheet};
@@ -110,12 +110,7 @@ pub fn toggle(ui: &Ui, label: &str, on: Signal<bool>, enabled: bool, on_flip: im
 /// A drop-down in Portal's look (`select`): the well, a hairline, 8 px corners.
 pub fn select(ui: &Ui, label: &str, options: Vec<String>, chosen: Signal<usize>) -> El {
     // The chosen option at the start, the arrow at the end, as a `select` draws them.
-    let s = w::select(ui, label.to_owned(), options, chosen).variant("p_select");
-    let tree = ui.tree();
-    if let Some(value) = tree.children(s.id()).into_iter().find(|c| tree.path(*c).ends_with("select_value")) {
-        let _ = ui.element(value).layout(|l| l.grow = 1.0);
-    }
-    s
+    w::select(ui, label.to_owned(), options, chosen).variant("p_select").justify(Justify::SpaceBetween)
 }
 
 /// Repaints `root` with `paint` and puts focus back on the control in the same place

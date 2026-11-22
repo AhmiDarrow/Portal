@@ -11,7 +11,7 @@ use std::rc::Rc;
 use portal_api::{FieldKind, Prompt, PromptAction, PromptAnswer, PromptKind, SettingsDoc, SettingsField};
 use remedy_ui::layout::{Align, Display, Justify, Length, Track};
 use remedy_ui::reactive::{untrack, Cancel, Signal};
-use remedy_ui::style::{LineHeight, States, StylePatch, StyleSheet};
+use remedy_ui::style::{BorderEdge, BorderSide, LineHeight, States, StylePatch, StyleSheet, TextAlign};
 use remedy_ui::widgets as w;
 use remedy_ui::{El, Ui};
 
@@ -259,10 +259,7 @@ fn paint(form: &Rc<Form>, root: &El) {
                     prev_row = false;
                     continue;
                 }
-                if prev_row {
-                    list = list.child(ui.el("p_setting_rule").height(1.0).fill_width());
-                }
-                list = list.child(row(form, f));
+                list = list.child(row(form, f, prev_row));
                 prev_row = true;
             }
             list
@@ -280,18 +277,14 @@ fn paint(form: &Rc<Form>, root: &El) {
 }
 
 fn header(ui: &Ui, text: &str, first: bool) -> El {
-    let mut col = w::column(ui).fill_width();
-    if !first {
-        col = col.child(ui.el("p_setting_head_rule").height(1.0).fill_width().layout(|l| l.margin.top = 16.0));
-    }
-    col.child(w::heading(ui, 3, text.to_owned()).variant("p_setting_head").layout(move |l| {
-        l.margin.top = if first { 4.8 } else { 9.6 };
+    w::column(ui).fill_width().child(w::heading(ui, 3, text.to_owned()).variant(if first { "p_setting_head_first" } else { "p_setting_head" }).fill_width().layout(move |l| {
+        l.margin.top = if first { 4.8 } else { 16.0 };
         l.margin.bottom = 1.6;
     }))
 }
 
-/// One field as a row (main.ts `fieldHtml`).
-fn row(form: &Rc<Form>, f: &SettingsField) -> El {
+/// One field as a row (main.ts `fieldHtml`), a `.setting`; `sep` puts the hairline over one that follows another.
+fn row(form: &Rc<Form>, f: &SettingsField, sep: bool) -> El {
     let (ui, ctx) = (&form.ui, &form.ctx);
     let label = tidy_label(&f.label);
     let id = f.id.clone().unwrap_or_default();
@@ -407,7 +400,7 @@ fn row(form: &Rc<Form>, f: &SettingsField) -> El {
         vec![Track::MinMax(Box::new(Track::Px(0.0)), Box::new(Track::Fr(1.0))), Track::MinMax(Box::new(Track::Px(0.0)), Box::new(Track::Px(288.0)))]
     };
     let note_el = if stacked { note_el.layout(|l| l.grid_column = None) } else { note_el };
-    ui.el("p_setting")
+    ui.el(if sep { "p_setting_sep" } else { "p_setting" })
         .layout(move |l| {
             l.display = Display::Grid;
             l.columns = cols.clone();
@@ -452,7 +445,9 @@ fn action_control(form: &Rc<Form>, f: &SettingsField, label: &str, id: &str, val
     if !plain_setting_label(&f.value).is_empty() {
         *compact = false;
     }
-    let shown = ui.el("p_setting_value").layout(|l| l.min_width = Length::Px(0.0));
+    // .setting-value: right-aligned, left on a phone.
+    let phone = form.ctx.width.get_untracked().unwrap_or(1280.0) <= 720.0;
+    let shown = ui.el("p_setting_value").text_align(if phone { TextAlign::Start } else { TextAlign::End }).layout(|l| l.min_width = Length::Px(0.0));
     let s2 = shown.clone();
     let shown = shown.bind(move || {
         let v = plain_setting_label(&value.get());
@@ -674,14 +669,19 @@ fn run_action(form: &Rc<Form>, id: &str, label: &str, note: Signal<Note>, done: 
 }
 
 pub fn rules(s: &mut StyleSheet, k: &Look) {
-    s.rule("p_setting_rule", None, States::NONE, StylePatch::default().background(mix(k.line, 0.75, remedy_ui::core::Color::TRANSPARENT)));
-    s.rule("p_setting", None, States::NONE, StylePatch::default().padding(remedy_ui::core::Insets { top: 9.6, bottom: 9.6, start: 0.0, end: 0.0 }));
-    s.rule("p_setting_head_rule", None, States::NONE, StylePatch::default().background(k.line));
+    let pad = remedy_ui::core::Insets { top: 9.6, bottom: 9.6, start: 0.0, end: 0.0 };
+    s.rule("p_setting", None, States::NONE, StylePatch::default().padding(pad));
+    // `.setting + .setting`
+    let rule = BorderSide::new(1.0, mix(k.line, 0.75, remedy_ui::core::Color::TRANSPARENT));
+    s.rule("p_setting_sep", None, States::NONE, StylePatch::default().padding(pad).border_side(BorderEdge::Top, rule));
+    let head = StylePatch::default().heading(true).weight(400.0).text_size(16.0).foreground(k.gold).line_height(LineHeight::Relative(1.4));
+    s.rule("heading", Some("p_setting_head_first"), States::NONE, head.clone());
+    // `.setting-head`: a hairline over it, 0.6rem above its text.
     s.rule(
         "heading",
         Some("p_setting_head"),
         States::NONE,
-        StylePatch::default().heading(true).weight(400.0).text_size(16.0).foreground(k.gold).line_height(LineHeight::Relative(1.4)),
+        head.border_side(BorderEdge::Top, BorderSide::new(1.0, k.line)).padding(remedy_ui::core::Insets { top: 9.6, bottom: 0.0, start: 0.0, end: 0.0 }),
     );
     s.rule("p_setting_note", None, States::NONE, StylePatch::default().foreground(k.muted).text_size(14.4));
     s.rule("p_setting_note_text", None, States::NONE, StylePatch::default().foreground(k.muted).text_size(14.4));

@@ -20,7 +20,7 @@ use remedy_ui::image::{image_ext, Fit, ImageOptions, ImageState, Source};
 use remedy_ui::input::{Key, PointerPhase};
 use remedy_ui::layout::{Align, Justify, Length, Position, Repeat, Track};
 use remedy_ui::reactive::Cancel;
-use remedy_ui::style::{LetterSpacing, Shadow, States, StickyInsets, StylePatch, StyleSheet, TextTransform};
+use remedy_ui::style::{BorderEdge, BorderSide, LetterSpacing, Shadow, States, StickyInsets, StylePatch, StyleSheet, TextTransform};
 use remedy_ui::view::{RichText, TextStylePatch};
 use remedy_ui::widgets as w;
 use remedy_ui::{El, Ui};
@@ -236,9 +236,7 @@ fn build(ui: &Ui, ctx: &Ctx, req: InfoRequest, info: MediaInfo, opener: Option<E
         .child(sources.clone())
         .child(w::spacer(ui))
         .child(status.clone());
-    // .info-foot's border-top.
-    let rule = ui.el("p_info_rule").height(1.0).fill_width().layout(|l| l.shrink = 0.0);
-    let foot = ui.el("p_info_foot_box").column().fill_width().layout(|l| l.shrink = 0.0).child(rule.clone()).child(foot);
+    let foot = ui.el("p_info_foot_box").column().fill_width().layout(|l| l.shrink = 0.0).child(foot);
     let spacer = w::spacer(ui);
     let dialog = ui
         .el("p_info_dialog")
@@ -374,6 +372,16 @@ fn year_of(info: &MediaInfo) -> String {
 pub fn page_locale(ui: &Ui) -> String {
     let own = ui.locale();
     if own.to_ascii_lowercase().split(['-', '_']).next() == Some("en") { own } else { "en".into() }
+}
+
+/// `new Date(ms).toLocaleString(PAGE_LOCALE)`: "11/22/2026, 3:04:05 PM" on this device's
+/// clock, with that instant's own UTC offset; empty for no time (0).
+pub fn local_string(ui: &Ui, ms: i64) -> String {
+    if ms <= 0 {
+        return String::new();
+    }
+    let lt = ui.local_time_at(ms.div_euclid(1000));
+    remedy_ui::i18n::CalendarSymbols::for_locale(&page_locale(ui)).format_instant(lt.local_seconds(), remedy_ui::i18n::DateTimeStyle::Numeric)
 }
 
 /// "Apr 4, 2005" from an add-on's `YYYY-MM-DD` date (main.ts `airedOn`), empty otherwise.
@@ -1058,7 +1066,8 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         none,
         StylePatch::default().foreground(k.muted).text_size(13.6),
     );
-    s.rule("p_info_rule", None, none, StylePatch::default().background(k.line));
+    // .info-foot's border-top.
+    s.rule("p_info_foot_box", None, none, StylePatch::default().border_side(BorderEdge::Top, BorderSide::new(1.0, k.line)));
     s.rule("p_info_status_text", Some("loading"), none, StylePatch::default().foreground(k.text));
     s.rule("p_info_spinner", None, none, StylePatch::default().foreground(k.gold));
 }

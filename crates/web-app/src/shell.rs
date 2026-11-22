@@ -17,7 +17,7 @@ use remedy_ui::motion::{Motion, Target};
 use remedy_ui::paint::Brush;
 use remedy_ui::reactive::{Cancel, Persist, Plain, Signal};
 use remedy_ui::router::Router;
-use remedy_ui::style::{StickyInsets, States, StylePatch, StyleSheet, TextTransform};
+use remedy_ui::style::{BorderEdge, BorderSide, StickyInsets, States, StylePatch, StyleSheet, TextTransform};
 use remedy_ui::view::Style;
 use remedy_ui::widgets as w;
 use remedy_ui::{show, App, El, Ui, WindowSpec};
@@ -287,7 +287,6 @@ fn header(ui: &Ui, ctx: &Ctx, chip: Signal<Chip>) -> El {
         .sticky(StickyInsets::top(0.0))
         .semantics(Semantics::new(Role::Banner))
         .child(top)
-        .child(ui.el("p_header_rule").fill_width().height(1.0).layout(|l| l.shrink = 0.0))
         .on_resize(move |s| head_h.set_if_changed(s.height.ceil()));
     // The player covers most of a phone screen: the header scrolls away instead of covering
     // it, except over theater and the mini player.
@@ -686,9 +685,11 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         "p_header",
         None,
         States::NONE,
-        StylePatch::default().background(mix(k.bg, 0.78, clear)).backdrop_blur(16.0),
+        StylePatch::default()
+            .background(mix(k.bg, 0.78, clear))
+            .backdrop_blur(16.0)
+            .border_side(BorderEdge::Bottom, BorderSide::new(1.0, mix(k.line, 0.85, clear))),
     );
-    s.rule("p_header_rule", None, States::NONE, StylePatch::default().background(mix(k.line, 0.85, clear)));
     s.rule("p_brand_bar", None, States::NONE, StylePatch::default().background(k.gold).radius(99.0));
     s.rule(
         "p_skip",

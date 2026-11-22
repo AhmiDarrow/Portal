@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use remedy_ui::core::Insets;
 use remedy_ui::layout::{Align, Length};
-use remedy_ui::style::{States, StylePatch, StyleSheet};
+use remedy_ui::style::{BorderStyle, States, StylePatch, StyleSheet};
 use remedy_ui::widgets as w;
 use remedy_ui::{El, Ui};
 
@@ -43,12 +43,14 @@ pub fn placeholder(ui: &Ui, heading: &str) -> El {
 pub struct KeepRow {
     rows: Rc<RefCell<Vec<El>>>,
     at: Rc<Cell<Option<usize>>>,
+    heading: Rc<RefCell<Option<El>>>,
 }
 
 impl KeepRow {
-    /// The rows just painted, in order.
-    pub fn set_rows(&self, rows: Vec<El>) {
+    /// The rows just painted, in order, and the page's `h1`, which takes focus when none are left.
+    pub fn set_rows(&self, rows: Vec<El>, heading: &El) {
         *self.rows.borrow_mut() = rows;
+        *self.heading.borrow_mut() = Some(heading.clone());
     }
 
     /// Before a repaint: notes which row has focus.
@@ -57,16 +59,17 @@ impl KeepRow {
         self.at.set(at);
     }
 
-    /// After a repaint: focus goes to the first control of that row, or of the last one.
-    // shortcut: with no rows left focus stays where it fell (the old page focuses the h1 with
-    // tabIndex -1); upgrade when an El can take focus without joining the Tab order.
+    /// After a repaint: focus goes to the first control of that row, or of the last one; with
+    /// none left, to the `h1` (main.ts `renderKeepingRow`: `tabIndex = -1`, then focus).
     pub fn restore(&self, ui: &Ui) {
         let Some(i) = self.at.take() else { return };
-        let rows = self.rows.clone();
+        let (rows, heading) = (self.rows.clone(), self.heading.clone());
         ui.after(std::time::Duration::ZERO, move || {
             let rows = rows.borrow();
             if let Some(r) = rows.get(i.min(rows.len().saturating_sub(1))) {
                 r.focus_first();
+            } else if let Some(h) = heading.borrow().clone() {
+                h.focus_target().focus();
             }
         });
     }
@@ -74,7 +77,7 @@ impl KeepRow {
 
 pub fn rules(s: &mut StyleSheet, k: &Look) {
     s.rule("p_count", None, States::NONE, StylePatch::default().text_size(17.6).foreground(k.muted));
-    // .empty-state; its border is dashed in the old page (ENGINE GAP: no dashed borders).
+    // .empty-state
     s.rule(
         "p_empty_state",
         None,
@@ -83,6 +86,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
             .padding(Insets { top: 24.0, bottom: 24.0, start: 22.4, end: 22.4 })
             .border(mix(k.gold, 0.35, k.line))
             .border_width(1.0)
+            .border_style(BorderStyle::Dashed)
             .radius(14.0)
             .background(mix(k.gold, 0.06, k.raised)),
     );
