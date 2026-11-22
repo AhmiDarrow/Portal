@@ -10,11 +10,25 @@ publish.workspace = true
 name = "portal-launcher"
 path = "src/main.rs"
 
+[[test]]
+name = "cli"
+path = "../../tests-private/launcher/tests/cli.rs"
+
 [dependencies]
 serde_json.workspace = true
+# RemedyUI from the clean local main checkout (an absolute path, so every Portal worktree
+# and the main checkout resolve the same copy), during the port.
+# The tray, notifications, the confirm dialogs in Portal's theme, autostart and the log
+# folder; drawn on the CPU (two small dialogs do not need a GPU).
+remedy-ui = { path = "C:/Users/Administrator/Projects/remedyui-main/crates/remedy-ui", default-features = false, features = ["widgets", "desktop", "image", "system-fonts"] }
+# Portal's faces: Remedy Sans for text, Ahmi Pixel for headings, as the dashboard sets them.
+remedy-ui-fonts = { path = "C:/Users/Administrator/Projects/remedyui-main/crates/remedy-ui-fonts", features = ["remedy-sans", "ahmi-pixel"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+
+[dev-dependencies]
+remedy-ui = { path = "C:/Users/Administrator/Projects/remedyui-main/crates/remedy-ui", default-features = false, features = ["widgets", "desktop", "image", "system-fonts", "headless"] }
 
 [build-dependencies]
 embed-resource = "3"
