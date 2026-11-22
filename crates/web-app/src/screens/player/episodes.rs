@@ -574,7 +574,23 @@ fn pick_season(d: &Dock, show: &str, season: u32) {
 /// The rotated "EPISODES" on the tab (`writing-mode: vertical-rl; rotate(180deg)`).
 fn vertical_label(ui: &Ui, text: &'static str) -> El {
     let size = Signal::new((14.0_f32, 70.0_f32));
-    let el = ui.el("p_theater_tab_label").pass_through();
+    // The same words laid out level and unseen give the turned box its size.
+    let measure = ui
+        .el("p_theater_tab_label")
+        .text(text.to_uppercase())
+        .nowrap()
+        .pass_through()
+        .layout(|l| {
+            l.position = Position::Absolute;
+            l.inset = Insets { top: 0.0, start: 0.0, end: remedy_ui::layout::AUTO, bottom: remedy_ui::layout::AUTO };
+        })
+        .style(remedy_ui::view::Style::new().opacity(0.0))
+        .on_resize(move |s| {
+            if size.get_untracked().is_ok_and(|(w, h)| (w - s.height).abs() > 0.5 || (h - s.width).abs() > 0.5) {
+                size.set((s.height, s.width));
+            }
+        });
+    let el = ui.el("p_theater_tab_label").pass_through().child(measure);
     let e2 = el.clone();
     el.bind(move || {
         let (w, h) = size.get();
@@ -591,10 +607,6 @@ fn vertical_label(ui: &Ui, text: &'static str) -> El {
         opts.max_width = None;
         opts.scale = cx.scale;
         let para = cx.layout_text(&RichText::plain(text.to_uppercase()), &style, opts);
-        let (pw, ph) = (para.width(), para.height());
-        if (size.get_untracked().unwrap_or_default().1 - pw).abs() > 0.5 {
-            let _ = size.try_set((ph, pw));
-        }
         // Read bottom to top: turned a quarter left about the box's bottom-left corner.
         cx.list.push(remedy_ui::paint::Item::PushTransform(
             Affine::rotate(-std::f32::consts::FRAC_PI_2).then(Affine::translate(Vec2::new(0.0, cx.size.height))),
@@ -928,6 +940,8 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     // .theater-tab: muted on the raised surface, a hairline at its end; gold while open.
     s.rule("p_theater_tab", None, States::NONE, StylePatch::default().background(k.raised).foreground(k.muted).padding(Insets { top: 12.8, bottom: 12.8, start: 0.0, end: 0.0 }));
     s.rule("p_theater_rule", None, States::NONE, StylePatch::default().background(k.line));
+    // .theater-tab-label: 0.72rem, 600, 0.14em apart, capitals.
+    s.rule("p_theater_tab_label", None, States::NONE, StylePatch::default().text_size(11.52).weight(600.0).letter_spacing(LetterSpacing::Em(0.14)));
     s.rule("p_theater_tab", None, States::HOVER, StylePatch::default().foreground(k.text));
     s.rule("p_theater_tab", None, States::SELECTED, StylePatch::default().foreground(k.gold));
     s.rule("p_theater_tab", None, States::FOCUS_VISIBLE, StylePatch::default().outline_offset(-2.0));

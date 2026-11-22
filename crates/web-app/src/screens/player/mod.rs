@@ -314,6 +314,10 @@ fn with_retry(text: &str) -> String {
 impl Dock {
     fn new(ui: &Ui, ctx: &Ctx) -> Dock {
         let _ = remedy_ui::view::strings::add_messages("media-playback", "en", WORDS);
+        // The skip glyphs' "10" is SVG text in the page's UI face (`.icon-btn svg text`).
+        for f in remedy_ui_fonts::all().into_iter().filter(|f| f.family == "Remedy Sans UI") {
+            remedy_ui::svg::add_font(f.data.to_vec());
+        }
         let p = prefs::now();
         let options = PlayerOptions::default()
             .autoplay(true)
@@ -329,7 +333,8 @@ impl Dock {
             .next_up_lead(Some(UP_NEXT_LEAD))
             .next_up_delay(p.autoplay.then_some(Duration::ZERO))
             .compact_pauses(true)
-            .keep_awake(true);
+            .keep_awake(true)
+            .web_backend(remedy_ui::playback::WebBackend::MediaSource);
         let player = Player::empty_platform(ui, options);
         let d = Dock(Rc::new(Inner {
             ui: ui.clone(),
