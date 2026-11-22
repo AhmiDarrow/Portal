@@ -148,9 +148,10 @@ fn details(ui: &Ui, ctx: &Ctx, title: &TitleDetail, phone: bool) -> El {
         .width(188.0)
         .layout(|l| l.shrink = 0.0)
         .child(art::art(ui, title.art.as_deref(), &title.name, ""));
-    let hero = ui
-        .el("p_details_hero")
-        .row()
+    let hero = ui.el("p_details_hero");
+    // `.hero { flex-direction: column }` at 720 px and under.
+    let hero = if phone { hero.column() } else { hero.row() };
+    let hero = hero
         .align(Align::Start)
         .gap(18.4)
         .fill_width()
