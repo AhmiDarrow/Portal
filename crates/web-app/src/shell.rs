@@ -47,6 +47,7 @@ pub fn app(app: &App) {
     let a = app.clone();
     app.open(WindowSpec::new("Portal"), move |ui, window| {
         crate::widgets::shows::attach(a.persist_store());
+        crate::prefs::attach(a.persist_store());
         let ctx = Ctx {
             app: a.clone(),
             api: api::Api::new(&a),
