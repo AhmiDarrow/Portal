@@ -10,11 +10,25 @@ publish.workspace = true
 name = "portal-launcher"
 path = "src/main.rs"
 
+[[test]]
+name = "cli"
+path = "../../tests-private/launcher/tests/cli.rs"
+
 [dependencies]
 serde_json.workspace = true
+# RemedyUI from its app-confirm branch (App::confirm, single_instance_reply) until that PR
+# merges; then ../../../../remedyui-main/crates/remedy-ui like the other crates.
+# The tray, notifications, the confirm dialogs in Portal's theme, autostart and the log
+# folder; drawn on the CPU (two small dialogs do not need a GPU).
+remedy-ui = { path = "../../../../RemedyUI/.claude/worktrees/confirm/crates/remedy-ui", default-features = false, features = ["widgets", "desktop", "image", "system-fonts"] }
+# Portal's faces: Remedy Sans for text, Ahmi Pixel for headings, as the dashboard sets them.
+remedy-ui-fonts = { path = "../../../../RemedyUI/.claude/worktrees/confirm/crates/remedy-ui-fonts", features = ["remedy-sans", "ahmi-pixel"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+
+[dev-dependencies]
+remedy-ui = { path = "../../../../RemedyUI/.claude/worktrees/confirm/crates/remedy-ui", default-features = false, features = ["widgets", "desktop", "image", "system-fonts", "headless"] }
 
 [build-dependencies]
 embed-resource = "3"

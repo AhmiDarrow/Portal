@@ -1,32 +1,42 @@
 use super::*;
 
 #[test]
-fn run_command_quotes_the_path() {
-    let exe = Path::new(r"C:\Users\A B\AppData\Local\Programs\Portal\portal-launcher.exe");
+fn the_entry_starts_the_tray_without_a_browser_from_the_run_key() {
+    let e = entry().unwrap();
     assert_eq!(
-        run_command(exe),
-        r#""C:\Users\A B\AppData\Local\Programs\Portal\portal-launcher.exe" --no-browser"#
+        e.name, "Portal",
+        "the Run value the installer writes and removes"
     );
+    assert_eq!(e.args, ["--no-browser"]);
+    assert!(e.run_key);
+    assert_eq!(e.program, std::env::current_exe().unwrap());
 }
 
-/// Writes and removes the real Run value:
+/// Writes and removes the real Run value (on Linux, the autostart entry):
 /// `cargo test -p portal-launcher -- --ignored`. Leaves it absent.
-#[cfg(windows)]
 #[test]
 #[ignore = "changes the Run registry key"]
 fn live_toggle() {
     assert!(
         !enabled(),
-        "a Portal Run value already exists; not touching it"
+        "a Portal sign-in entry already exists; not touching it"
     );
     set(true).unwrap();
     assert!(enabled());
-    let listed = std::process::Command::new("reg")
-        .args(["query", &format!(r"HKCU\{RUN_KEY}"), "/v", VALUE_NAME])
-        .output()
-        .unwrap();
-    let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
-    assert!(listed.contains("--no-browser"), "{listed}");
+    #[cfg(windows)]
+    {
+        let listed = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                NAME,
+            ])
+            .output()
+            .unwrap();
+        let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
+        assert!(listed.contains("--no-browser"), "{listed}");
+    }
     set(false).unwrap();
     assert!(!enabled());
     set(false).unwrap();

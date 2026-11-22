@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-const DEFAULT_PORT: u16 = 8490;
+pub const DEFAULT_PORT: u16 = 8490;
 const START_WAIT: Duration = Duration::from_secs(45);
 const STOP_WAIT: Duration = Duration::from_secs(20);
 const POLL: Duration = Duration::from_millis(200);
@@ -395,17 +395,6 @@ pub fn ensure_running(port: u16) -> Result<(), String> {
     }
 }
 
-/// The service another launcher is starting: waits for it to answer, and
-/// never starts one of its own.
-#[cfg_attr(not(windows), allow(dead_code))]
-pub fn await_running(port: u16) -> Result<(), String> {
-    match probe(port) {
-        Probe::Portal => Ok(()),
-        Probe::Other => Err(port_taken_message(port)),
-        Probe::Silent | Probe::Nothing => wait_for_service(port, None),
-    }
-}
-
 /// Stops the Portal on the port and waits until its process has exited, so
 /// its files can be replaced. `Ok(false)` means no Portal was running.
 pub fn shutdown(port: u16) -> Result<bool, String> {
@@ -457,7 +446,6 @@ pub fn shutdown(port: u16) -> Result<bool, String> {
 
 /// True when process `pid` runs from the folder this launcher is in.
 /// False when that cannot be read.
-#[cfg(windows)]
 pub fn in_our_folder(pid: u32) -> bool {
     let ours = std::env::current_exe()
         .ok()
@@ -467,11 +455,6 @@ pub fn in_our_folder(pid: u32) -> bool {
         (Some(ours), Some(theirs)) => same_path(&ours, &theirs),
         _ => false,
     }
-}
-
-#[cfg(not(windows))]
-pub fn in_our_folder(_pid: u32) -> bool {
-    true
 }
 
 /// Windows paths ignore case, and a folder may end in a separator.
