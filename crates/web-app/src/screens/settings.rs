@@ -1233,7 +1233,10 @@ fn save_subs(ctx: &Ctx, s: State, put: SubtitleSettingsPut, note: String, fields
     ctx.api.run(api::set_subtitle_settings(&put), &Cancel::new(), move |out| {
         match out {
             Ok(v) => {
-                p.data.set(Some(clean_subs(v)));
+                // The player's next search uses the new languages (subtitles.ts `rememberSubtitleSettings`).
+                let v = clean_subs(v);
+                crate::screens::player::subs::remember_settings(Some(v.clone()));
+                p.data.set(Some(v));
                 p.say(note, "");
                 for f in &fields {
                     f.set_value("");

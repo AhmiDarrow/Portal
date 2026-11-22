@@ -124,7 +124,7 @@ fn now_ms() -> u64 {
 }
 
 /// player.ts `castFail`.
-fn cast_fail(e: &api::ApiError) -> String {
+pub(super) fn cast_fail(e: &api::ApiError) -> String {
     if e.detail.trim().is_empty() { "Cast failed.".into() } else { e.detail.clone() }
 }
 
@@ -217,10 +217,8 @@ fn status_line(state: Option<CastDeviceState>, name: &str, quiet: bool) -> Strin
 }
 
 /// The subtitle the TV should show with a new cast (player.ts `castSubtitle` when CC is on).
-/// P9 seam: the subtitles port fills this in; until then the TV starts without one, and
-/// Portal's own language carry-over (`subtitle_lang` on the server) still applies.
-fn cast_subtitle(_d: &Dock) -> Option<CastSubtitle> {
-    None
+fn cast_subtitle(d: &Dock) -> Option<CastSubtitle> {
+    d.cast_subtitle()
 }
 
 // ---- The player's controls, on the TV ----
@@ -267,8 +265,7 @@ impl RemoteControl for Control {
         self.with(|d, dev| send_volume(d, dev, CastVolumeBody { level: None, muted: Some(muted) }));
     }
     fn set_captions(&self, _track: Option<usize>) {
-        // P9 seam: CC while casting (player.ts `syncDeviceSubtitles`) comes with the
-        // subtitles port, through `api::cast_device_subtitles`.
+        // CC while casting goes to the TV from the dock's pick (`subs.rs` `sync_device_subs`).
     }
     fn next(&self) {
         // Next while casting: the next item is made and goes to the same TV (player.ts `start`).
