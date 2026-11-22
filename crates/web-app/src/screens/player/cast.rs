@@ -21,7 +21,7 @@ use remedy_ui::core::time::{Instant, SystemTime, UNIX_EPOCH};
 use remedy_ui::core::Insets;
 use remedy_ui::input::{Key, PointerPhase};
 use remedy_ui::layout::{Length, Position, AUTO};
-use remedy_ui::playback::{PlaybackState, Remote, RemoteControl, RemoteStatus};
+use remedy_ui::playback::{PlaybackState, Remote, RemoteControl, RemoteStatus, Timeline};
 use remedy_ui::reactive::{untrack, Signal};
 use remedy_ui::style::{States, StylePatch, StyleSheet};
 use remedy_ui::widgets as w;
@@ -124,7 +124,7 @@ fn now_ms() -> u64 {
 }
 
 /// player.ts `castFail`.
-fn cast_fail(e: &api::ApiError) -> String {
+pub(super) fn cast_fail(e: &api::ApiError) -> String {
     if e.detail.trim().is_empty() { "Cast failed.".into() } else { e.detail.clone() }
 }
 
@@ -217,10 +217,8 @@ fn status_line(state: Option<CastDeviceState>, name: &str, quiet: bool) -> Strin
 }
 
 /// The subtitle the TV should show with a new cast (player.ts `castSubtitle` when CC is on).
-/// P9 seam: the subtitles port fills this in; until then the TV starts without one, and
-/// Portal's own language carry-over (`subtitle_lang` on the server) still applies.
-fn cast_subtitle(_d: &Dock) -> Option<CastSubtitle> {
-    None
+fn cast_subtitle(d: &Dock) -> Option<CastSubtitle> {
+    d.cast_subtitle()
 }
 
 // ---- The player's controls, on the TV ----
@@ -267,8 +265,7 @@ impl RemoteControl for Control {
         self.with(|d, dev| send_volume(d, dev, CastVolumeBody { level: None, muted: Some(muted) }));
     }
     fn set_captions(&self, _track: Option<usize>) {
-        // P9 seam: CC while casting (player.ts `syncDeviceSubtitles`) comes with the
-        // subtitles port, through `api::cast_device_subtitles`.
+        // CC while casting goes to the TV from the dock's pick (`subs.rs` `sync_device_subs`).
     }
     fn next(&self) {
         // Next while casting: the next item is made and goes to the same TV (player.ts `start`).
@@ -481,12 +478,19 @@ fn stop_casting(d: &Dock) {
     close_menu(d, false);
     let Some(dev) = d.0.cast.current() else { return };
     d.0.cast.busy.set(true);
+    // A look answered meanwhile would see the cast gone and say "Casting ended.".
+    d.0.cast.st.borrow_mut().generation += 1;
     d.run(api::cast_device_stop(&dev.id), move |d, out| {
         d.0.cast.busy.set(false);
+        if !d.0.cast.current().is_some_and(|c| c.id == dev.id) {
+            return;
+        }
         match out {
-            Ok(_) if d.0.cast.current().is_some_and(|c| c.id == dev.id) => ended(d, "Stopped casting.".into()),
-            Ok(_) => {}
-            Err(e) => d.set_status(&cast_fail(&e)),
+            Ok(_) => ended(d, "Stopped casting.".into()),
+            Err(e) => {
+                d.set_status(&cast_fail(&e));
+                follow(d);
+            }
         }
     });
 }
@@ -607,6 +611,11 @@ fn apply(d: &Dock, view: &CastDeviceView) {
         st.line = line.clone();
     }
     drop(st);
+    if let Some(l) = length {
+        // The seek bar spans what the TV plays: a timeline left from the item that played
+        // here (or the episode before) would keep its length.
+        p.set_timeline(Some(Timeline::new(Duration::ZERO).length(dur(l))));
+    }
     p.set_remote_status(status);
     // Written when it changes, so an error stays until there is news.
     if changed {

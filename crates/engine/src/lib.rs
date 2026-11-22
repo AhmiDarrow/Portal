@@ -5,6 +5,8 @@
 //! apply only to a Kodi this process started.
 
 mod addons;
+#[cfg(target_os = "linux")]
+pub mod child;
 mod catalog;
 mod dialog_catalog;
 mod error;

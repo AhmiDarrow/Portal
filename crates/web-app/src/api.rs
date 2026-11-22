@@ -343,6 +343,10 @@ pub fn subtitle_file_url(id: &str, offset: f64) -> String {
     let at = if offset.is_finite() && offset > 0.0 { (offset * 1000.0).round() / 1000.0 } else { 0.0 };
     format!("/api/subtitles/file/{}?offset={at}", encode(id))
 }
+/// A text file Portal serves, such as a video's own subtitle track (send with [`Api::run_text`]).
+pub fn text_file(url: &str) -> Call<String> {
+    get(url.to_owned())
+}
 pub fn subtitle_settings() -> Call<SubtitleSettings> {
     get("/api/subtitles/settings")
 }

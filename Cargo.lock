@@ -3629,6 +3629,7 @@ version = "0.3.10"
 dependencies = [
  "flate2",
  "getrandom 0.2.17",
+ "libc",
  "portal-api",
  "quick-xml 0.37.5",
  "reqwest",
@@ -3638,6 +3639,7 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.59.0",
+ "x11rb",
  "zip",
 ]
 
@@ -3653,6 +3655,7 @@ dependencies = [
  "portal-engine",
  "portal-library",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "sha2",
@@ -3661,6 +3664,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "windows-sys 0.59.0",
+ "zbus 5.19.0",
  "zip",
 ]
 
