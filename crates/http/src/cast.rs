@@ -770,7 +770,7 @@ impl CastHub {
         self.device
             .as_ref()
             .map(|slot| slot.view.clone())
-            .unwrap_or_else(DeviceView::default)
+            .unwrap_or_default()
     }
 
     fn device_endpoint(&self, id: &str) -> Option<DeviceEndpoint> {
@@ -2506,9 +2506,7 @@ fn hide_remux_window(command: &mut tokio::process::Command) {
         command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
     }
     #[cfg(not(windows))]
-    {
-        let _ = command;
-    }
+    portal_engine::child::contain_tokio(command, true);
 }
 
 /// The TV may still have the previous file open. Try until it lets go.
@@ -3082,9 +3080,7 @@ fn hide_agent_window(command: &mut tokio::process::Command) {
         command.creation_flags(CREATE_NO_WINDOW);
     }
     #[cfg(not(windows))]
-    {
-        let _ = command;
-    }
+    portal_engine::child::contain_tokio(command, false);
 }
 
 fn watch_args(device: &DeviceRef) -> Vec<String> {
@@ -3179,8 +3175,7 @@ struct AppBackend {
 }
 
 fn api_detail(err: &super::ApiError) -> String {
-    Some(err.1 .0.detail.as_str())
-        .map(clean_label)
+    Some(clean_label(err.1 .0.detail.as_str()))
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| "Playback failed.".into())
 }

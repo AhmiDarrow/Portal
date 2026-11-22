@@ -11,14 +11,15 @@ use std::time::{Duration, Instant};
 mod fake_portal;
 use fake_portal::FakePortal;
 
-/// A scratch data folder, as `%LOCALAPPDATA%`, with the first-run notice already seen.
+/// A scratch data folder, as `%LOCALAPPDATA%` (`$XDG_DATA_HOME` on Linux), with the first-run notice already seen.
 struct Scratch(std::path::PathBuf);
 
 impl Scratch {
     fn new(port: u16) -> Scratch {
         let dir = std::env::temp_dir().join(format!("portal-launcher-cli-{port}"));
-        std::fs::create_dir_all(dir.join("Portal")).unwrap();
-        std::fs::write(dir.join("Portal").join("tray-intro-shown"), b"").unwrap();
+        let data = dir.join(if cfg!(windows) { "Portal" } else { "portal" });
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("tray-intro-shown"), b"").unwrap();
         Scratch(dir)
     }
 }
@@ -34,7 +35,7 @@ fn launcher(port: u16, scratch: &Scratch, args: &[&str]) -> Command {
     command
         .args(args)
         .env("PORTAL_PORT", port.to_string())
-        .env("LOCALAPPDATA", &scratch.0);
+        .env("LOCALAPPDATA", &scratch.0)        .env("XDG_DATA_HOME", &scratch.0);
     command
 }
 

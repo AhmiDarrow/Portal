@@ -436,15 +436,24 @@ fn loose_numeric_hosts_and_inner_ranges_are_not_web_art() {
 /// Starts the installed Kodi as Portal does and checks no window of it
 /// stays on screen while it starts. Run by hand, with no Kodi running:
 /// `cargo test -p portal-engine kodi_starts_hidden -- --ignored`.
+/// On Linux it starts `KODI_EXE`, else `kodi` from PATH, on the X display.
 #[test]
 #[ignore]
 fn kodi_starts_hidden() {
-    let exe = Path::new(r"C:\Program Files\Kodi\kodi.exe");
-    if !exe.is_file() {
-        return;
-    }
-    let pid = spawn_hidden(exe, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
-        .expect("Kodi starts");
+    #[cfg(windows)]
+    let pid = {
+        let exe = Path::new(r"C:\Program Files\Kodi\kodi.exe");
+        if !exe.is_file() {
+            return;
+        }
+        spawn_hidden(exe, DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+            .expect("Kodi starts")
+    };
+    #[cfg(target_os = "linux")]
+    let pid = {
+        let exe = std::env::var_os("KODI_EXE").map_or_else(|| PathBuf::from("kodi"), PathBuf::from);
+        spawn_kodi(&exe).expect("Kodi starts")
+    };
     guard_start(pid);
     let mut saw_window = false;
     let mut shown_since: Option<std::time::Instant> = None;

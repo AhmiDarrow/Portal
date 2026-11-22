@@ -231,6 +231,7 @@ fn a_frozen_portal_is_restarted_end_to_end() {
     // reach another test.
     std::env::set_var("PORTAL_PORT", port.to_string());
     std::env::set_var("LOCALAPPDATA", &scratch);
+    std::env::set_var("XDG_DATA_HOME", &scratch);
     std::env::set_var("APPDATA", &scratch);
     std::env::set_var("KODI_EXE", scratch.join("no-kodi.exe"));
     std::env::set_var("PORTAL_TEST_KODI_PORT", free().to_string());
