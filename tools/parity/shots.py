@@ -96,6 +96,23 @@ def rect_mask(shape, rects, pad=0) -> np.ndarray:
     return m
 
 
+def click_steps(b, steps, timeout):
+    """Clicks each `role:name[:nth]` control (found as trace.py finds it: the ARIA mirror on
+    the new side), waiting for it to appear, before the screenshot."""
+    from trace import CLICK  # same control lookup as the behaviour runs
+    for step in steps:
+        role, name, *rest = step.split(":")
+        nth = int(rest[0]) if rest else 0
+        end = time.monotonic() + timeout
+        while True:
+            got = b.js(CLICK, role or None, name, nth, False)
+            if got == "ok" or time.monotonic() > end:
+                break
+            time.sleep(0.5)
+        if got != "ok":
+            print(f"  click {step}: {got}", flush=True)
+
+
 def capture(b, url, args, mask_cfg, route, size_key, remedy_page=False):
     b.open(url, "/".join(url.split("/")[:3]))
     frames = 2
@@ -107,6 +124,9 @@ def capture(b, url, args, mask_cfg, route, size_key, remedy_page=False):
         frames = args.stable_frames
         # Its first fetches answer after the first frame; give them a moment before frames count.
         time.sleep(args.remedy_delay)
+    if args.click:
+        settle(b, args.settle_timeout, args.settle_interval, frames)
+        click_steps(b, args.click, args.settle_timeout)
     img, settled = settle(b, args.settle_timeout, args.settle_interval, frames)
     text = b.js(TEXT_RECTS) or []
     sels = mask_cfg.get("selectors", {})
@@ -184,6 +204,11 @@ def main():
     ap.add_argument("--load-timeout", type=float, default=300,
                     help="seconds a page may take to load, and the RemedyUI page to make its window (default %(default)s)")
     ap.add_argument("--fail-above", type=float, default=0.0, help="exit 1 when a non-text score is above this %% (default %(default)s)")
+    ap.add_argument("--click", action="append", default=[],
+                    help="after load, click the control `role:name[:nth]` (repeatable), e.g. button:Info:1")
+    ap.add_argument("--extra", action="append", default=[],
+                    help="another page to shoot, `name=#/hash` (repeatable), e.g. a folder opened directly")
+    ap.add_argument("--tag", default="", help="suffix for the output folder names, e.g. -info")
     args = ap.parse_args()
 
     old_base, new_base = args.old.rstrip("/") + "/", args.new.rstrip("/") + "/"
@@ -191,6 +216,7 @@ def main():
     mask_cfg = json.loads(Path(args.mask).read_text()) if args.mask else {}
     include = set(args.routes.split(",")) if args.routes else None
     routes = wd.routes(server, include)
+    routes += [tuple(e.split("=", 1)) for e in args.extra]
     out = Path(args.out)
     results = []
 
@@ -226,7 +252,7 @@ def main():
                 text_mask = rect_mask(shape, o[2] + n[2], pad=2)
                 ignore = rect_mask(shape, fixed + o[3] + n[3])
                 stats, old, new, vis = score(o[0], n[0], args.tolerance, text_mask, ignore)
-                d = out / size_key / name
+                d = out / size_key / (name + args.tag)
                 d.mkdir(parents=True, exist_ok=True)
                 Image.fromarray(o[0]).save(d / "old.png")
                 Image.fromarray(n[0]).save(d / "new.png")
