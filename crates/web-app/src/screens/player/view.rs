@@ -7,9 +7,9 @@ use std::rc::Rc;
 
 use portal_api::{PlayKind, Quality, TitleKind};
 use remedy_ui::a11y::{Action, Live, Role, Semantics};
-use remedy_ui::core::{Color, Insets};
+use remedy_ui::core::{Color, CornerRadii, Insets};
 use remedy_ui::layout::{Align, Display, Justify, Length, Position, Track, AUTO};
-use remedy_ui::playback::{player_with, PlayerParts};
+use remedy_ui::playback::{player_with, NextUpPlacement, PlayerParts};
 use remedy_ui::reactive::{untrack, Signal};
 use remedy_ui::style::{LineHeight, Shadow, States, StylePatch, StyleSheet};
 use remedy_ui::view::RichText;
@@ -581,27 +581,13 @@ pub fn dock(d: &Dock) -> El {
     let i = d.inner();
     let ui = &i.ui;
     let player = i.player.clone();
-    let parts = PlayerParts::default().icons(player_icons).end(vec![pip_button(d)]).title(mini_head(d));
+    let parts = PlayerParts::default().next_up_placement(NextUpPlacement::Corner).icons(player_icons).end(vec![pip_button(d)]).title(mini_head(d));
     let widget = player_with(ui, &player, "Player", parts);
     let stage = ui.el("p_dock_stage").column().clip().child(widget.clone());
     let side_el = side(d);
     let theater_side = episodes::side(d);
-    // Under 720 px only the top corners are round (`border-radius: 16px 16px 0 0`): the
-    // surface and its hairline are drawn here, as a style has one radius for every corner.
-    let narrow_cell = Rc::new(Cell::new(false));
-    let nc = narrow_cell.clone();
     let root = ui
         .el("p_dock")
-        .paint(move |cx| {
-            if !nc.get() {
-                return;
-            }
-            let k = Look::of(cx.theme);
-            let r = remedy_ui::core::Rect::new(0.0, 0.0, cx.size.width, cx.size.height);
-            let radii = remedy_ui::core::CornerRadii { top_start: 16.0, top_end: 16.0, bottom_end: 0.0, bottom_start: 0.0 };
-            cx.list.fill_rounded(r, radii, remedy_ui::paint::Brush::Solid(k.raised));
-            cx.list.border(r, radii, 1.0, k.line);
-        })
         .semantics(Semantics::new(Role::ContentInfo).label("Player"))
         .child(theater_side.clone())
         .child(stage.clone())
@@ -792,7 +778,6 @@ pub fn dock(d: &Dock) -> El {
         let wide = matches!(mode, Mode::Theater | Mode::Full);
         let fixed = mode == Mode::Normal;
         let chrome_h = ch2.get().unwrap_or(67.4);
-        narrow_cell.set(variant == "narrow");
         let _ = wd2.clone().layout(move |l| {
             l.height = if wide {
                 Length::Percent(1.0)
@@ -859,8 +844,12 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         "p_dock",
         Some("narrow"),
         States::NONE,
-        // Its surface is painted by the dock itself: only the top corners are round.
-        StylePatch::default().background(clear).border(clear).border_width(0.0).radius(0.0).shadow(Shadow::new(0.0, 22.0, 56.0, mix(black, 0.42, clear))),
+        StylePatch::default()
+            .background(k.raised)
+            .border(k.line)
+            .border_width(1.0)
+            .corners(CornerRadii { top_start: 16.0, top_end: 16.0, ..CornerRadii::ZERO })
+            .shadow(Shadow::new(0.0, 22.0, 56.0, mix(black, 0.42, clear))),
     );
     // body.theater .dock.open, and the full-screen stage: black, edge to edge.
     for v in ["theater", "full"] {

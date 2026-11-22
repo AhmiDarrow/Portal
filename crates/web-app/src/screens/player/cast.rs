@@ -21,7 +21,7 @@ use remedy_ui::core::time::{Instant, SystemTime, UNIX_EPOCH};
 use remedy_ui::core::Insets;
 use remedy_ui::input::{Key, PointerPhase};
 use remedy_ui::layout::{Length, Position, AUTO};
-use remedy_ui::playback::{PlaybackState, Remote, RemoteControl, RemoteStatus, Timeline};
+use remedy_ui::playback::{PlaybackState, Remote, RemoteControl, RemoteStatus, StageStatus, Timeline};
 use remedy_ui::reactive::{untrack, Signal};
 use remedy_ui::style::{States, StylePatch, StyleSheet};
 use remedy_ui::widgets as w;
@@ -461,16 +461,17 @@ pub(crate) fn release(d: &Dock) -> bool {
     true
 }
 
-/// player.ts `castEnded`: the dock stays on the item, ready to play here from where the TV
-/// was. Play asks for the stream again from there ([`Dock::retry`]).
+/// player.ts `castEnded`: the dock stays on the item, paused where the TV was; Play plays
+/// here from there (a seek outside the stream, [`Dock::skip_to`]).
 fn ended(d: &Dock, text: String) {
-    let left = secs(untrack(|| d.0.player.position()));
+    let at = untrack(|| d.0.player.position());
+    let left = secs(at);
     leave_state(d);
     if left > 0.0 {
         d.0.st.borrow_mut().left_at = left;
     }
-    d.0.player.fail(text.clone());
     d.set_status(&text);
+    d.0.player.leave_remote_paused(at, Some(StageStatus::new(text)));
 }
 
 /// player.ts `stopCasting`: back to this browser.
