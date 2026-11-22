@@ -97,7 +97,7 @@ fn save_target(t: Option<&PlayTarget>) -> Option<SaveTitle> {
 }
 
 /// What Info shows for the target before the lookup answers (player.ts `infoSeed`).
-fn info_seed(t: &PlayTarget) -> portal_api::MediaInfo {
+pub(super) fn info_seed(t: &PlayTarget) -> portal_api::MediaInfo {
     let episode = t.kind == PlayKind::Episode && t.season.is_some() && t.episode.is_some_and(|e| e > 0);
     let show = human_title(t.show_title.as_deref());
     let mut base = portal_api::MediaInfo::default();
@@ -174,14 +174,6 @@ fn bar_button(ui: &Ui, g: Glyph, label: impl Into<String>) -> El {
         .justify(remedy_ui::layout::Justify::Center)
         .child(glyph(ui, g, size))
         .semantics(Semantics::new(Role::Button).label(label.into()).action(Action::Click))
-}
-
-/// P9's seam: the subtitles control, disabled until subtitles are ported, where
-/// index.html's `#dock-subs` sits (after the clock, before picture in picture).
-fn captions_seam(ui: &Ui) -> El {
-    let b = bar_button(ui, Glyph::Captions, "Subtitles off").disabled(true);
-    w::tooltip(&b, "Subtitles off (c)");
-    b
 }
 
 /// `#dock-pip`: shown where the browser has picture in picture, not on a phone-sized page,
@@ -596,7 +588,7 @@ pub fn dock(d: &Dock) -> El {
     let i = d.inner();
     let ui = &i.ui;
     let player = i.player.clone();
-    let parts = PlayerParts::default().icons(player_icons).end(vec![captions_seam(ui), pip_button(d)]).title(mini_head(d));
+    let parts = PlayerParts::default().icons(player_icons).end(vec![pip_button(d)]).title(mini_head(d));
     let widget = player_with(ui, &player, "Player", parts);
     let stage = ui.el("p_dock_stage").column().clip().child(widget.clone());
     let side_el = side(d);

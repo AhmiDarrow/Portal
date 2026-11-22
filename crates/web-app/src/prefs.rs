@@ -233,6 +233,7 @@ pub fn set(ctx: &Ctx, patch: Patch) {
     }
     if let Some(m) = patch.subtitles {
         p.subtitles = m;
+        p.subtitles_set = true;
         shared.subtitles = Some(mode_str(m).into());
     }
     if let Some(l) = patch.subtitle_language {
