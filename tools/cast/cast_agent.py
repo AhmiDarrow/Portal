@@ -569,8 +569,10 @@ def timed_out(exc: BaseException) -> bool:
     return exc.__class__.__name__ == "RequestTimeout"
 
 
-def do_seek(cast: Any, seconds: float, timeout: float) -> None:
+def do_seek(cast: Any, seconds: float, timeout: float, answer_wait: float = 0) -> None:
+    """Seeks; waits `answer_wait` seconds (else `timeout`) for the TV's answer."""
     mc = media_controller(cast, timeout)
+    wait = answer_wait if answer_wait > 0 else timeout
     status = getattr(mc, "status", None)
     url = str(getattr(status, "content_id", None) or "")
     growing = finite(getattr(status, "duration", None)) is None
@@ -585,10 +587,10 @@ def do_seek(cast: Any, seconds: float, timeout: float) -> None:
     # The seek was sent and the TV keeps loading, so that is not a failure.
     answered = True
     try:
-        mc.seek(seconds, timeout=max(timeout, 1.0))
+        mc.seek(seconds, timeout=wait)
         if paused:
             # A seek always asks the receiver to resume, so pause it again.
-            mc.pause(timeout=max(timeout, 1.0))
+            mc.pause(timeout=wait)
     except Exception as exc:
         if not timed_out(exc):
             raise
@@ -853,6 +855,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subtitles", default="")
     parser.add_argument("--subtitles-lang", default="")
     parser.add_argument("--seconds", type=finite_number, default=-1)
+    # How long a seek waits for the TV's answer before reporting it sent (Portal's
+    # seek_answer_wait); 0 uses --timeout.
+    parser.add_argument("--answer-wait", type=finite_number, default=0)
     parser.add_argument("--level", type=finite_number, default=None)
     parser.add_argument("--muted", choices=("true", "false"), default=None)
     parser.add_argument("--timeout", type=float, default=0)
@@ -984,7 +989,7 @@ def run(argv: list[str]) -> None:
             elif args.command == "seek":
                 if args.seconds < 0 or args.seconds != args.seconds:
                     fail("A seek time is required.", "bad_request")
-                do_seek(cast, args.seconds, limit)
+                do_seek(cast, args.seconds, limit, max(args.answer_wait, 0.0))
             else:
                 fail("Unknown cast command.", "bad_request")
         except SystemExit:
