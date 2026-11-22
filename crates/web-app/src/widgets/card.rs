@@ -68,15 +68,45 @@ pub type OnPlay = Rc<dyn Fn(&Card)>;
 
 /// main.ts `playCard`: a show with nothing to resume opens its episodes; an episode plays
 /// with its season open under the player, so stopping lands on its episodes; a movie plays.
-///
-/// Until the player dock is ported (plan P7) the play itself is the player's `play` hook,
-/// which does nothing yet; the page moves as it will then.
 pub fn play_card(ctx: &Ctx) -> OnPlay {
     let ctx = ctx.clone();
     Rc::new(move |card: &Card| {
+        let resume = titles::resume_of(card.resume_seconds);
         if card.kind == TitleKind::Tv {
-            ctx.go(&Page::Show { id: card.id.clone(), season: card.season });
+            let episodes = Page::Show { id: card.id.clone(), season: card.season };
+            let Some(file) = card.file.clone().filter(|f| !f.is_empty()) else {
+                ctx.go(&episodes);
+                return;
+            };
+            let line = titles::episode_line(card.season, card.episode, card.episode_name.as_deref());
+            let title = [line, card.episode_name.clone().unwrap_or_default(), card.name.clone()].into_iter().find(|s| !s.is_empty()).unwrap_or_default();
+            crate::widgets::play::play(
+                &ctx,
+                crate::widgets::play::PlayTarget {
+                    kind: portal_api::PlayKind::Episode,
+                    id: card.id.clone(),
+                    file,
+                    title,
+                    season: card.season,
+                    episode: card.episode,
+                    art: card.art.clone(),
+                    show_title: Some(card.name.clone()),
+                    show_id: Some(card.id.clone()),
+                    info: None,
+                    resume_seconds: resume,
+                    manual_links: false,
+                    progress_kind: TitleKind::Tv,
+                    progress_id: card.id.clone(),
+                    progress_name: card.name.clone(),
+                    track_progress: true,
+                },
+            );
+            // The season opens under the player, so stopping lands on its episodes.
+            ctx.go(&episodes);
+            return;
         }
+        let file = card.file.clone().filter(|f| !f.is_empty()).unwrap_or_else(|| card.id.clone());
+        crate::widgets::play::play(&ctx, crate::widgets::play::movie_target(&card.id, &file, &card.name, card.art.clone(), resume));
     })
 }
 

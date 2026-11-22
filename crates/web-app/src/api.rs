@@ -41,6 +41,13 @@ impl<T> Call<T> {
         self
     }
 
+    /// Waits as long as the server takes, as the old page's `fetch` does: starting Kodi or
+    /// resolving a stream can take minutes.
+    pub fn no_timeout(mut self) -> Self {
+        self.req = self.req.timeout(None);
+        self
+    }
+
     /// The request as it will be sent.
     pub fn request(&self) -> &Request {
         &self.req
@@ -368,10 +375,10 @@ pub fn upload_incoming(name: &str, content_type: &str, bytes: Vec<u8>) -> Call<I
     Call::new(Request::post("/api/incoming").multipart(&form))
 }
 pub fn prompt() -> Call<PromptBody> {
-    get("/api/prompt")
+    get("/api/prompt").no_timeout()
 }
 pub fn answer_prompt(body: &PromptAnswer) -> Call<OkBody> {
-    post_json("/api/prompt", body)
+    post_json("/api/prompt", body).no_timeout()
 }
 pub fn repos() -> Call<RepoList> {
     get("/api/repos")
@@ -423,24 +430,24 @@ pub fn remove_device(id: &str) -> Call<OkBody> {
 // ---- Playback ----
 
 pub fn play(body: &PlayRequest) -> Call<PlayAccepted> {
-    post_json("/api/play", body)
+    post_json("/api/play", body).no_timeout()
 }
 pub fn job(id: &str) -> Call<PlayJob> {
-    get(format!("/api/play/{}", encode(id)))
+    get(format!("/api/play/{}", encode(id))).no_timeout()
 }
 pub fn early(id: &str, body: &PlayRequest) -> Call<OkBody> {
     post_json(format!("/api/play/{}/early", encode(id)), body)
 }
 pub fn seek(id: &str, seconds: f64) -> Call<PlayJob> {
-    post_json(format!("/api/play/{}/seek", encode(id)), &SeekBody { seconds })
+    post_json(format!("/api/play/{}/seek", encode(id)), &SeekBody { seconds }).no_timeout()
 }
 /// Restarts the job's stream at `seconds` in a new quality; the add-on is not asked again.
 pub fn set_quality(id: &str, quality: Quality, seconds: f64) -> Call<PlayJob> {
-    post_json(format!("/api/play/{}/quality", encode(id)), &QualityBody { quality, seconds })
+    post_json(format!("/api/play/{}/quality", encode(id)), &QualityBody { quality, seconds }).no_timeout()
 }
 /// Restarts the job's stream at `seconds` on another audio track.
 pub fn set_audio(id: &str, index: u32, seconds: f64) -> Call<PlayJob> {
-    post_json(format!("/api/play/{}/audio", encode(id)), &AudioBody { index, seconds })
+    post_json(format!("/api/play/{}/audio", encode(id)), &AudioBody { index, seconds }).no_timeout()
 }
 pub fn stop(id: &str) -> Call<OkBody> {
     delete(format!("/api/play/{}", encode(id)))

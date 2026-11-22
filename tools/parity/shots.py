@@ -101,8 +101,10 @@ def click_steps(b, steps, timeout):
     the new side), waiting for it to appear, before the screenshot."""
     from trace import CLICK  # same control lookup as the behaviour runs
     for step in steps:
-        role, name, *rest = step.split(":")
-        nth = int(rest[0]) if rest else 0
+        # The name may hold colons ("Resume 3:25: Heat"); a last part of digits is the nth.
+        role, *rest = step.split(":")
+        nth = int(rest.pop()) if len(rest) > 1 and rest[-1].isdigit() else 0
+        name = ":".join(rest)
         end = time.monotonic() + timeout
         while True:
             got = b.js(CLICK, role or None, name, nth, False)
