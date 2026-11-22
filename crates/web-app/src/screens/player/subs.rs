@@ -32,6 +32,7 @@ use remedy_ui::reactive::{untrack, Cancel};
 use remedy_ui::Ui;
 
 use super::{view, Dock};
+use crate::screens::settings::{browser_languages, primary_language};
 use crate::{api, prefs};
 
 /// How long the saved subtitle settings are trusted before they are read again.
@@ -41,13 +42,7 @@ pub const TRACKS_POLL: Duration = Duration::from_secs(3);
 
 thread_local! {
     static SETTINGS: RefCell<Option<(f64, SubtitleSettings)>> = const { RefCell::new(None) };
-    static LANGUAGE_LIMIT: Cell<usize> = const { Cell::new(4) };
     static TRACKS_TRIES: Cell<u32> = const { Cell::new(100) };
-}
-
-/// How many of the browser's languages stand in when none are saved (default 4).
-pub fn set_language_limit(n: usize) {
-    LANGUAGE_LIMIT.with(|c| c.set(n.max(1)));
 }
 
 /// How many times the job is asked for its own tracks before giving up (default 100).
@@ -644,26 +639,8 @@ impl Dock {
     }
 }
 
-// ---- Languages (subtitles.ts) ----
-
-/// ISO 639-2 tags that video files use for their tracks.
-const THREE_LETTER: &[(&str, &str)] = &[
-    ("eng", "en"), ("spa", "es"), ("fre", "fr"), ("fra", "fr"), ("ger", "de"), ("deu", "de"), ("ita", "it"),
-    ("por", "pt"), ("dut", "nl"), ("nld", "nl"), ("swe", "sv"), ("dan", "da"), ("nor", "no"), ("nob", "no"),
-    ("nno", "no"), ("fin", "fi"), ("pol", "pl"), ("cze", "cs"), ("ces", "cs"), ("hun", "hu"), ("rum", "ro"),
-    ("ron", "ro"), ("gre", "el"), ("ell", "el"), ("tur", "tr"), ("rus", "ru"), ("ukr", "uk"), ("hrv", "hr"),
-    ("srp", "sr"), ("bul", "bg"), ("ara", "ar"), ("heb", "he"), ("per", "fa"), ("fas", "fa"), ("hin", "hi"),
-    ("tha", "th"), ("vie", "vi"), ("ind", "id"), ("may", "ms"), ("msa", "ms"), ("chi", "zh"), ("zho", "zh"),
-    ("jpn", "ja"), ("kor", "ko"), ("slv", "sl"), ("slo", "sk"), ("slk", "sk"), ("est", "et"), ("lav", "lv"),
-    ("lit", "lt"), ("ice", "is"), ("isl", "is"), ("cat", "ca"),
-];
-
-/// "en" from "en-US", "eng" or "EN"; empty when there is no tag.
-pub fn primary_language(tag: &str) -> String {
-    let text = tag.trim().to_lowercase().replace('_', "-");
-    let primary = text.split('-').next().unwrap_or("");
-    THREE_LETTER.iter().find(|(k, _)| *k == primary).map_or(primary, |(_, v)| v).to_owned()
-}
+// ---- Languages (subtitles.ts); the language list, `primary_language` and the browser's
+// languages are the Settings page's ([`crate::screens::settings`]). ----
 
 /// Primary code, plus the region for Portuguese and Chinese, the only ones told apart.
 fn identity(tag: &str) -> (String, &'static str) {
@@ -685,32 +662,6 @@ pub fn same_language(a: &str, b: &str) -> bool {
     let (l, lr) = identity(a);
     let (r, rr) = identity(b);
     !l.is_empty() && l == r && (lr.is_empty() || rr.is_empty() || lr == rr)
-}
-
-/// subtitles.ts `browserLanguages`: codes the service knows ("en", "pt-BR"), best first.
-pub fn browser_languages(locales: &[String]) -> Vec<String> {
-    let limit = LANGUAGE_LIMIT.with(Cell::get);
-    let mut out: Vec<String> = Vec::new();
-    for raw in locales {
-        let lower = raw.to_lowercase();
-        let code = match primary_language(raw).as_str() {
-            "pt" if lower.contains("br") => "pt-BR".to_owned(),
-            "pt" => "pt-PT".to_owned(),
-            "zh" if ["tw", "hk", "mo", "hant"].iter().any(|r| lower.contains(r)) => "zh-TW".to_owned(),
-            "zh" => "zh-CN".to_owned(),
-            c => c.to_owned(),
-        };
-        if !code.is_empty() && !out.contains(&code) {
-            out.push(code);
-        }
-        if out.len() >= limit {
-            break;
-        }
-    }
-    if out.is_empty() {
-        out.push("en".into());
-    }
-    out
 }
 
 /// subtitles.ts `preferredLanguages`: the saved ones, else the browser's.

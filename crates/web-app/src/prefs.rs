@@ -233,6 +233,7 @@ pub fn set(ctx: &Ctx, patch: Patch) {
     }
     if let Some(m) = patch.subtitles {
         p.subtitles = m;
+        // Every caller of prefs.ts `setPrefs` that sets `subtitles` also sets `subtitlesSet`.
         p.subtitles_set = true;
         shared.subtitles = Some(mode_str(m).into());
     }
