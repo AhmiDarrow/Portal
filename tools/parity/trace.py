@@ -105,7 +105,7 @@ def default_scenario(routes) -> list[dict]:
     return steps
 
 
-def run_side(b, rec, base, side, routes, steps) -> None:
+def run_side(b, rec, base, side, routes, steps, remedy_page=False, load_timeout=300.0) -> None:
     hashes = dict(routes)
     for i, step in enumerate(steps):
         label = f"{i:02} " + (f"open {step['open']}" if "open" in step else f"click {step.get('role') or '*'} '{step['click']}'")
@@ -115,7 +115,7 @@ def run_side(b, rec, base, side, routes, steps) -> None:
                 rec.add({"event": "skipped", "why": "no such route"})
                 continue
             b.open(base + hashes[step["open"]], "/".join(base.split("/")[:3]))
-            result = "ok"
+            result = "ok" if not remedy_page or b.wait_drawn(load_timeout) else "no RemedyUI window"
         else:
             if DENY.search(step["click"]):
                 raise SystemExit(f"refusing to click '{step['click']}': it matches the read-only deny list")
@@ -219,6 +219,8 @@ def main():
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent / "out" / "trace"))
     ap.add_argument("--browser", default="firefox", choices=["firefox", "chrome"])
     ap.add_argument("--strict-counts", action="store_true")
+    ap.add_argument("--load-timeout", type=float, default=300,
+                    help="seconds a page may take to load, and the RemedyUI page to make its window (default %(default)s)")
     args = ap.parse_args()
 
     routes = wd.routes(args.target, set(args.routes.split(",")) if args.routes else None)
@@ -233,12 +235,13 @@ def main():
     try:
         for side, path in (("old", args.old), ("new", args.new)):
             # A fresh profile per side: a warm image cache would hide the second side's fetches.
-            b = wd.Browser(args.browser)
+            b = wd.Browser(args.browser, load_timeout=args.load_timeout)
             try:
                 wd.set_look(b, origin, args.theme, args.fonts)
                 b.resize(*map(int, args.size.split("x")))
                 start = len(rec.entries)
-                run_side(b, rec, origin + "/" + path.strip("/") + ("/" if path.strip("/") else ""), side, routes, steps)
+                run_side(b, rec, origin + "/" + path.strip("/") + ("/" if path.strip("/") else ""), side, routes, steps,
+                         remedy_page=side == "new" and args.new != args.old, load_timeout=args.load_timeout)
                 rec.tag = ""
                 sides[side] = rec.entries[start:]
             finally:

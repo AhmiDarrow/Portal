@@ -49,7 +49,8 @@ class WebDriverError(RuntimeError):
 class Browser:
     """One headless browser session."""
 
-    def __init__(self, browser: str = "firefox", scheme: str = "dark", reduced_motion: bool = False):
+    def __init__(self, browser: str = "firefox", scheme: str = "dark", reduced_motion: bool = False,
+                 load_timeout: float = 300):
         exe = {"firefox": "geckodriver", "chrome": "chromedriver"}[browser]
         path = shutil.which(exe)
         if not path:
@@ -87,9 +88,13 @@ class Browser:
             raise WebDriverError(f"no session: {value}")
         self.sid = value["sessionId"]
         self.size = None
+        # The new UI's wasm is tens of MB in a debug build: navigation may take minutes.
+        self.load_timeout = load_timeout
+        self.cmd("POST", "/timeouts", {"pageLoad": int(load_timeout * 1000), "script": int(load_timeout * 1000)})
 
     def cmd(self, method: str, path: str, body=None):
-        r = http_json(f"{self.base}/session/{self.sid}{path}", method, body)
+        # Longer than the browser's own page-load timeout, so WebDriver reports it, not us.
+        r = http_json(f"{self.base}/session/{self.sid}{path}", method, body, getattr(self, "load_timeout", 60) + 30)
         value = r.get("value") if isinstance(r, dict) else None
         if isinstance(value, dict) and "error" in value:
             raise WebDriverError(f"{value['error']}: {value.get('message', '')[:300]}")
@@ -146,6 +151,15 @@ class Browser:
         self.cmd("POST", "/frame", {"id": frame})
         if self.js("return document.documentURI").startswith("about:"):
             raise WebDriverError(f"{url} did not load in the frame (framing refused?)")
+
+    def wait_drawn(self, timeout: float) -> bool:
+        """Waits until a RemedyUI page has made its window (`[data-remedy-window]`)."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if self.js("return !!document.querySelector('[data-remedy-window]')"):
+                return True
+            time.sleep(0.25)
+        return False
 
     def screenshot(self) -> bytes:
         png = base64.b64decode(self.cmd("GET", "/screenshot"))
