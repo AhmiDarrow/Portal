@@ -3669,6 +3669,8 @@ name = "portal-launcher"
 version = "0.3.10"
 dependencies = [
  "embed-resource",
+ "remedy-ui",
+ "remedy-ui-fonts",
  "serde_json",
  "windows-sys 0.59.0",
 ]
@@ -3983,6 +3985,7 @@ version = "1.0.0-rc.1"
 dependencies = [
  "remedy-ui-a11y",
  "remedy-ui-bridge-android",
+ "remedy-ui-bridge-headless",
  "remedy-ui-bridge-linux",
  "remedy-ui-bridge-macos",
  "remedy-ui-bridge-web",
@@ -4005,6 +4008,7 @@ dependencies = [
  "remedy-ui-render-cpu",
  "remedy-ui-render-gpu",
  "remedy-ui-secure",
+ "remedy-ui-services-desktop",
  "remedy-ui-services-i18n",
  "remedy-ui-services-net",
  "remedy-ui-services-webstorage",
@@ -4039,6 +4043,15 @@ dependencies = [
  "remedy-ui-host",
  "remedy-ui-input",
  "winit",
+]
+
+[[package]]
+name = "remedy-ui-bridge-headless"
+version = "1.0.0-rc.1"
+dependencies = [
+ "remedy-ui-core",
+ "remedy-ui-host",
+ "remedy-ui-input",
 ]
 
 [[package]]
@@ -4365,6 +4378,25 @@ name = "remedy-ui-secure"
 version = "1.0.0-rc.1"
 dependencies = [
  "zeroize",
+]
+
+[[package]]
+name = "remedy-ui-services-desktop"
+version = "1.0.0-rc.1"
+dependencies = [
+ "futures-core",
+ "jni 0.21.1",
+ "js-sys",
+ "ndk-context",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "wasm-bindgen",
+ "web-sys",
+ "windows",
+ "windows-core",
+ "windows-sys 0.61.2",
+ "zbus 6.3.0",
 ]
 
 [[package]]
