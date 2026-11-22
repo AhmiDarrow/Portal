@@ -16,8 +16,7 @@ use std::time::Duration;
 use axum::extract::{ConnectInfo, State};
 use axum::http::StatusCode;
 use axum::Json;
-use portal_api::OkBody;
-use serde::{Deserialize, Serialize};
+use portal_api::{AppView, EncoderView, OkBody, OnBody};
 
 use crate::{fail, from_this_pc, paths, ApiError, AppState};
 
@@ -27,30 +26,6 @@ const LAUNCHER_FAILED: &str = "Portal's tray program did not do that.";
 const LAUNCHER_LIMIT: Duration = Duration::from_secs(10);
 /// The launcher's exit code for "Start with Windows is off".
 const AUTOSTART_OFF: i32 = 3;
-
-#[derive(Debug, Serialize)]
-pub(crate) struct AppView {
-    /// False when the tray program is missing, as in a source checkout.
-    tray: bool,
-    /// Whether Portal starts when the user signs in; absent when unknown.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    autostart: Option<bool>,
-    encoder: EncoderView,
-}
-
-/// What makes the picture when a video has to be encoded.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct EncoderView {
-    /// Whether a graphics card may be used, as the user last chose.
-    hardware: bool,
-    /// The card this PC has for it, or "cpu" when it has none that works.
-    card: &'static str,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct EncoderBody {
-    on: bool,
-}
 
 const ENCODER_FILE: &str = "encoder.json";
 
@@ -80,13 +55,8 @@ async fn encoder_view(state: &AppState) -> EncoderView {
         .unwrap_or("cpu");
     EncoderView {
         hardware: state.0.player.hardware_wanted(),
-        card,
+        card: card.to_string(),
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct AutostartBody {
-    on: bool,
 }
 
 fn this_pc(peer: SocketAddr) -> Result<(), ApiError> {
@@ -197,7 +167,7 @@ pub(crate) async fn app_encoder_get(
 pub(crate) async fn app_encoder(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(body): Json<EncoderBody>,
+    Json(body): Json<OnBody>,
 ) -> Result<Json<AppView>, ApiError> {
     this_pc(peer)?;
     if save_hardware(&paths::portal_dir(), body.on).is_err() {
@@ -214,7 +184,7 @@ pub(crate) async fn app_encoder(
 pub(crate) async fn app_autostart(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Json(body): Json<AutostartBody>,
+    Json(body): Json<OnBody>,
 ) -> Result<Json<AppView>, ApiError> {
     this_pc(peer)?;
     let exe = require_launcher()?;

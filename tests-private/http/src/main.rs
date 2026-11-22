@@ -97,7 +97,7 @@ fn plugin_urls_come_out_of_addon_actions() {
 fn a_foreign_restart_is_a_conflict() {
     let (code, body) = from_engine(EngineError::ForeignRestart);
     assert_eq!(code, StatusCode::CONFLICT);
-    let text = body.0["detail"].as_str().unwrap();
+    let text = body.0.detail.as_str();
     assert!(text.contains("already running"));
     assert!(!text.to_ascii_lowercase().contains("password"));
 }
@@ -106,7 +106,7 @@ fn a_foreign_restart_is_a_conflict() {
 fn not_found_uses_a_public_sentence() {
     let (code, body) = from_engine(EngineError::NotFound);
     assert_eq!(code, StatusCode::NOT_FOUND);
-    assert_eq!(body.0["detail"], "That item is gone.");
+    assert_eq!(body.0.detail, "That item is gone.");
 }
 
 #[test]
@@ -116,12 +116,12 @@ fn bad_request_keeps_the_engine_sentence() {
     ));
     assert_eq!(code, StatusCode::BAD_REQUEST);
     assert_eq!(
-        body.0["detail"],
+        body.0.detail,
         "That item is an add-on action, not a video."
     );
     let (code, body) = from_engine(EngineError::BadRequest("Enter a name.".into()));
     assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(body.0["detail"], "Enter a name.");
+    assert_eq!(body.0.detail, "Enter a name.");
 }
 
 #[test]
@@ -130,9 +130,9 @@ fn list_put_name_rejects_blank_and_keeps_omitted() {
     assert_eq!(list_put_name(Some("  Show  ")).unwrap(), "Show");
     let err = list_put_name(Some("   ")).unwrap_err();
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    assert_eq!(err.1 .0["detail"], "Enter a name.");
+    assert_eq!(err.1 .0.detail, "Enter a name.");
     let err = list_put_name(Some("")).unwrap_err();
-    assert_eq!(err.1 .0["detail"], "Enter a name.");
+    assert_eq!(err.1 .0.detail, "Enter a name.");
 }
 
 #[test]

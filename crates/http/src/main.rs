@@ -23,8 +23,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use portal_api::{
+    ActionBody, AudioBody, ErrorBody, HistoryName, HistoryTitle, IncomingFile, Ping, ProgressBody,
+    QualityBody, RunBody, SeekBody, ZipInstall,
     AddonList, AddonUpdates, BrowsePage, CardList, HistoryList, Home, InstallResult, JobState, ListPut, OkBody,
-    PlayAccepted, PlayJob, PlayKind, PlayRequest, ProgressReport, Prompt, PromptAction,
+    PlayAccepted, PlayJob, PlayKind, PlayRequest, Prompt, PromptAction,
     PromptAnswer, PromptBody, PromptKind, RemoveResult, RepoDetail, RepoList, SavedMap, SavedQuery,
     SettingWrite, SettingsDoc, Source, Status, TitleDetail, TitleKind, WindowRequest,
 };
@@ -92,18 +94,6 @@ struct SearchQuery {
 #[derive(Deserialize)]
 struct ImageQuery {
     path: String,
-}
-
-#[derive(serde::Serialize)]
-struct ActionBody {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    browse_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    settings_addon: Option<String>,
-    /// True when a RunPlugin action was started; the page should watch `/api/prompt`.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    ran: bool,
 }
 
 struct CachedBrowse {
@@ -544,12 +534,12 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(4);
 
 /// Identifies this service to the desktop launcher. The pid lets a stop wait
 /// for the process to exit (it quits Kodi after the port closes).
-async fn ping() -> Json<serde_json::Value> {
-    Json(json!({
-        "app": "portal",
-        "version": env!("CARGO_PKG_VERSION"),
-        "pid": std::process::id(),
-    }))
+async fn ping() -> Json<Ping> {
+    Json(Ping {
+        app: "portal".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        pid: std::process::id(),
+    })
 }
 
 /// Loopback only, and only with the launcher's header: a custom header forces
@@ -628,10 +618,16 @@ async fn read_store<T: Send + 'static>(
         })
 }
 
-type ApiError = (StatusCode, Json<serde_json::Value>);
+type ApiError = (StatusCode, Json<ErrorBody>);
 
 fn fail(code: StatusCode, detail: impl Into<String>) -> ApiError {
-    (code, Json(json!({ "detail": detail.into() })))
+    (
+        code,
+        Json(ErrorBody {
+            detail: detail.into(),
+            pair: None,
+        }),
+    )
 }
 
 fn from_engine(err: EngineError) -> ApiError {
@@ -753,26 +749,8 @@ async fn history_clear(State(state): State<AppState>) -> Result<Json<OkBody>, Ap
     Ok(Json(OkBody { ok: true }))
 }
 
-#[derive(Debug, Deserialize)]
-struct HistoryName {
-    #[serde(default)]
-    name: String,
-    #[serde(flatten)]
-    title: HistoryTitle,
-}
-
 /// The title the page showed at a slot. Rows shift while something plays,
 /// so the slot alone can point at a neighbour.
-#[derive(Debug, Default, Deserialize)]
-struct HistoryTitle {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    season: Option<u32>,
-    #[serde(default)]
-    episode: Option<u32>,
-}
-
 fn history_row(store: &Store, slot: usize, title: &HistoryTitle) -> Option<usize> {
     match title.id.as_deref() {
         Some(id) => store.history_slot(slot, id, title.season, title.episode),
@@ -1011,16 +989,6 @@ async fn addons(State(state): State<AppState>) -> Result<Json<AddonList>, ApiErr
     Ok(Json(list))
 }
 
-#[derive(Deserialize)]
-struct ProgressBody {
-    #[serde(flatten)]
-    report: ProgressReport,
-    /// Pause, stop, seek, and leaving the page ask to write the file now.
-    /// A steady playhead omits it.
-    #[serde(default)]
-    flush: bool,
-}
-
 async fn progress(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -1121,11 +1089,6 @@ async fn settings_action(
     }))
 }
 
-#[derive(Deserialize)]
-struct RunBody {
-    file: String,
-}
-
 /// Run an add-on row that is not a video, as Kodi does when one is picked:
 /// `RunPlugin`. Playback stays on `/api/play`.
 async fn run_plugin(
@@ -1173,7 +1136,7 @@ const INCOMING_LIMIT: usize = 32 * 1024 * 1024;
 /// The original name is not kept.
 async fn incoming_file(
     mut multipart: axum::extract::Multipart,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<IncomingFile>, ApiError> {
     let mut saved: Option<std::path::PathBuf> = None;
     while let Some(field) = multipart
         .next_field()
@@ -1208,9 +1171,9 @@ async fn incoming_file(
     let Some(path) = saved else {
         return Err(fail(StatusCode::BAD_REQUEST, "Choose a file."));
     };
-    Ok(Json(serde_json::json!({
-        "path": path.display().to_string(),
-    })))
+    Ok(Json(IncomingFile {
+        path: path.display().to_string(),
+    }))
 }
 
 fn incoming_extension(name: &str) -> &'static str {
@@ -1916,11 +1879,6 @@ async fn play_stop(
     Ok(Json(OkBody { ok: true }))
 }
 
-#[derive(Deserialize)]
-struct SeekBody {
-    seconds: f64,
-}
-
 async fn play_seek(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
@@ -1933,12 +1891,6 @@ async fn play_seek(
         .await
         .map_err(from_engine)?;
     Ok(Json(job))
-}
-
-#[derive(Deserialize)]
-struct QualityBody {
-    quality: portal_api::Quality,
-    seconds: f64,
 }
 
 async fn play_quality(
@@ -1957,12 +1909,6 @@ async fn play_quality(
     Ok(Json(job))
 }
 
-#[derive(Deserialize)]
-struct AudioBody {
-    index: u32,
-    seconds: f64,
-}
-
 async fn play_audio(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
@@ -1977,13 +1923,6 @@ async fn play_audio(
         .await
         .map_err(from_engine)?;
     Ok(Json(job))
-}
-
-#[derive(Deserialize)]
-struct ZipInstall {
-    url: String,
-    #[serde(default)]
-    name: Option<String>,
 }
 
 async fn repos_list(State(state): State<AppState>) -> Result<Json<RepoList>, ApiError> {
