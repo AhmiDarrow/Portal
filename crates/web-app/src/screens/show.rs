@@ -410,8 +410,11 @@ fn center_when_laid_out(ui: Ui, row: El, tries: u32) {
         match row.bounds().filter(|b| b.size().height > 0.0) {
             Some(b) => {
                 let (size, h) = (b.size(), u2.window_size().height);
-                let top = remedy_ui::core::Point::new(0.0, size.height / 2.0 - h / 2.0);
-                row.scroll_rect_into_view(remedy_ui::core::Rect::from_origin_size(top, remedy_ui::core::Size::new(size.width, h)));
+                // The middle of the window below `html { scroll-padding-top: 4.75rem }`: a box
+                // that tall above and below the row's middle lands it there.
+                let reach = h + 76.0;
+                let top = remedy_ui::core::Point::new(0.0, size.height / 2.0 - reach / 2.0);
+                row.scroll_rect_into_view(remedy_ui::core::Rect::from_origin_size(top, remedy_ui::core::Size::new(size.width, reach)));
             }
             None if tries > 0 => center_when_laid_out(u2, row, tries - 1),
             None => {}
