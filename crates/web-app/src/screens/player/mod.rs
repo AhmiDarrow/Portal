@@ -502,17 +502,19 @@ impl Dock {
         // Choices made on another screen or device show here (prefs.ts on mount and when
         // the page is seen again).
         prefs::sync(&self.0.ctx, || {});
-        // The page hidden or closed: save the place now (the ticker may not run again).
+        // Seen again: choices made elsewhere meanwhile.
         let w2 = with.clone();
         let _ = self.0.ui.root().on_visibility(move |seen| {
-            w2(&|d| {
-                if seen {
-                    prefs::sync(&d.0.ctx, || {});
-                } else {
-                    d.post_progress(true, true, None);
-                }
-            });
+            if seen {
+                w2(&|d| prefs::sync(&d.0.ctx, || {}));
+            }
         });
+        // The page hidden or closed: save the place now, with keepalive so the post outlives
+        // the tab (player.ts on visibilitychange and pagehide; the ticker may not run again).
+        // ENGINE GAP: `on_leaving` does not say whether the page is closing or only hidden,
+        // so the job is not stopped here as pagehide does (that would end it on a tab switch).
+        let w2 = with.clone();
+        self.0.ctx.app.on_leaving(move || w2(&|d| d.post_progress(true, true, None)));
     }
 
     fn remember_opener(&self) {
