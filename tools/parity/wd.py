@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import shutil
 import socket
@@ -74,6 +75,9 @@ class Browser:
                 "browser.cache.disk.enable": False,
                 "webgl.force-enabled": True,
             }
+            # Extra Firefox prefs, e.g. {"webgl.disabled": true} when the machine's WebGL hangs
+            # (RemedyUI then draws with its CPU renderer).
+            prefs.update(json.loads(os.environ.get("PARITY_FIREFOX_PREFS", "{}")))
             caps = {"browserName": "firefox", "moz:firefoxOptions": {"args": ["-headless"], "prefs": prefs}}
         else:
             chrome_args = ["--headless=new", "--force-device-scale-factor=1", "--hide-scrollbars",

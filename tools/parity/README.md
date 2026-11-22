@@ -72,6 +72,14 @@ python tools/parity/shots.py --routes home,history --sizes 390x844 --theme light
   share of pixels that differ by 1 or 2, so even those stay visible.
 - `--mask` file (JSON): rectangles in CSS px and CSS selectors (looked up in both pages),
   keyed by `*`, a route name, or `route@WxH`. See `mask.example.json`.
+- `PARITY_FIREFOX_PREFS` (JSON) adds Firefox prefs to every session, e.g.
+  `{"webgl.disabled": true}` when WebGL hangs on the machine (the new UI then draws with
+  RemedyUI's CPU renderer).
+- `--click role:name[:nth]` (repeatable) presses a control after the page settles and
+  before the screenshot, found as `trace.py` finds controls (the ARIA mirror on the new
+  side); `--tag -info` suffixes the output folders. Info dialogs:
+  `--routes title --click button:Info --tag -info` (a movie), `--routes show --click
+  button:Info --tag -info` (the show) and `--click button:Info:1` (its first episode).
 - While `/next/` only has placeholders (or 404s), the tool still runs and reports large
   differences; it notes when the new side is not a RemedyUI page (`[data-remedy-window]`).
 

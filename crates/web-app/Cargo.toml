@@ -21,7 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 # A path dependency on the clean local RemedyUI main checkout during the port (an absolute
 # path, so every Portal worktree and the main checkout resolve the same copy).
-remedy-ui = { path = "C:/Users/Administrator/Projects/remedyui-main/crates/remedy-ui", features = ["web", "net", "widgets", "image", "svg", "playback", "webstorage"] }
+remedy-ui = { path = "C:/Users/Administrator/Projects/remedyui-main/crates/remedy-ui", features = ["web", "net", "widgets", "image", "svg", "playback", "webstorage", "i18n"] }
 # Portal's faces: Remedy Sans (text), Ahmi Pixel (headings) and AhmiPrint, beside the
 # engine's Remedy Sans UI. Turning the features on here adds them to every window.
 remedy-ui-fonts = { path = "C:/Users/Administrator/Projects/remedyui-main/crates/remedy-ui-fonts", features = ["remedy-sans", "ahmi-pixel", "ahmi-print"] }
