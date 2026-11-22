@@ -60,21 +60,29 @@ def decode(png: bytes) -> np.ndarray:
     return np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
 
 
-def settle(b: wd.Browser, timeout: float, interval: float) -> tuple[np.ndarray, bool]:
-    """Screenshots until two in a row match exactly (animations, fetches and fonts done)."""
+def settle(b: wd.Browser, timeout: float, interval: float, frames: int = 2) -> tuple[np.ndarray, bool]:
+    """Screenshots until `frames` in a row match exactly (animations, fetches and fonts done)."""
     try:
         b.js_async(WAIT_FONTS)
     except wd.WebDriverError:
         pass
     end = time.monotonic() + timeout
-    last = decode(b.screenshot())
+    # The page's text too (the RemedyUI mirror follows each built page), so a frame drawn
+    # while a fetch is still out does not pass for the settled page.
+    state = lambda: (decode(b.screenshot()), b.js(MIRROR_TEXT))
+    last, text = state()
+    same = 1
     while time.monotonic() < end:
         time.sleep(interval)
-        now = decode(b.screenshot())
-        if now.shape == last.shape and np.array_equal(now, last):
+        now, now_text = state()
+        same = same + 1 if now.shape == last.shape and np.array_equal(now, last) and now_text == text else 1
+        last, text = now, now_text
+        if same >= frames:
             return now, True
-        last = now
     return last, False
+
+
+MIRROR_TEXT = "return Array.from(document.querySelectorAll('[data-remedy-a11y] [data-node]'), e => e.textContent).join('|')"
 
 
 def rect_mask(shape, rects, pad=0) -> np.ndarray:
@@ -88,9 +96,18 @@ def rect_mask(shape, rects, pad=0) -> np.ndarray:
     return m
 
 
-def capture(b, url, args, mask_cfg, route, size_key):
+def capture(b, url, args, mask_cfg, route, size_key, remedy_page=False):
     b.open(url, "/".join(url.split("/")[:3]))
-    img, settled = settle(b, args.settle_timeout, args.settle_interval)
+    frames = 2
+    if remedy_page:
+        # The wasm loads after the document: the canvas comes later, then its first frames
+        # (fetches, images, fonts). Blank or half-drawn screens must not count as settled.
+        if not b.wait_drawn(args.load_timeout):
+            print(f"  {url}: no [data-remedy-window] after {args.load_timeout:.0f} s", flush=True)
+        frames = args.stable_frames
+        # Its first fetches answer after the first frame; give them a moment before frames count.
+        time.sleep(args.remedy_delay)
+    img, settled = settle(b, args.settle_timeout, args.settle_interval, frames)
     text = b.js(TEXT_RECTS) or []
     sels = mask_cfg.get("selectors", {})
     selectors = sels.get("*", []) + sels.get(route, []) + sels.get(f"{route}@{size_key}", [])
@@ -160,6 +177,12 @@ def main():
     ap.add_argument("--browser", default="firefox", choices=["firefox", "chrome"])
     ap.add_argument("--settle-timeout", type=float, default=20)
     ap.add_argument("--settle-interval", type=float, default=0.5)
+    ap.add_argument("--stable-frames", type=int, default=3,
+                    help="identical screenshots in a row that count as settled on the RemedyUI side (default %(default)s)")
+    ap.add_argument("--remedy-delay", type=float, default=2.0,
+                    help="seconds to wait after the RemedyUI page first draws, before counting stable frames (default %(default)s)")
+    ap.add_argument("--load-timeout", type=float, default=300,
+                    help="seconds a page may take to load, and the RemedyUI page to make its window (default %(default)s)")
     ap.add_argument("--fail-above", type=float, default=0.0, help="exit 1 when a non-text score is above this %% (default %(default)s)")
     args = ap.parse_args()
 
@@ -186,7 +209,7 @@ def main():
             wd.set_look(b, framing[o], args.theme, args.fonts)
         return framing[o] + base[len(o):]
 
-    b = wd.Browser(args.browser, args.scheme, args.reduced_motion)
+    b = wd.Browser(args.browser, args.scheme, args.reduced_motion, args.load_timeout)
     try:
         for o in {origin_of(old_base), origin_of(new_base)}:
             wd.set_look(b, o, args.theme, args.fonts)
@@ -195,7 +218,7 @@ def main():
             b.resize(w, h)
             for name, hash_ in routes:
                 o = capture(b, via(old_base) + hash_, args, mask_cfg, name, size_key)
-                n = capture(b, via(new_base) + hash_, args, mask_cfg, name, size_key)
+                n = capture(b, via(new_base) + hash_, args, mask_cfg, name, size_key, remedy_page=new_base != old_base)
                 rects = mask_cfg.get("rects", {})
                 fixed = rects.get("*", []) + rects.get(name, []) + rects.get(f"{name}@{size_key}", [])
                 shape = (max(o[0].shape[0], n[0].shape[0]), max(o[0].shape[1], n[0].shape[1]))

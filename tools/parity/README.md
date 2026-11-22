@@ -47,6 +47,13 @@ python tools/parity/shots.py --routes home,history --sizes 390x844 --theme light
 - Each page loads fresh (via `about:blank`), waits for `document.fonts.ready`, then takes
   screenshots every 0.5 s until two in a row are identical (20 s at most; `UNSETTLED` is
   printed otherwise). Live content that never settles (a clock) belongs in a mask.
+- The RemedyUI side first waits for the page to make its window (`[data-remedy-window]`)
+  and for its ARIA mirror to have content (`--load-timeout`, default 300 s, is also
+  WebDriver's page-load timeout, since a debug wasm is tens of MB), waits `--remedy-delay`
+  (default 2 s) for its first fetches, then needs `--stable-frames` (default 3) screenshots
+  in a row with the same pixels and the same mirror text, so a blank canvas or a page still
+  waiting on the server is never compared. `trace.py` waits for the
+  window the same way and takes the same `--load-timeout`.
 - Per route and size it writes `old.png`, `new.png`, `diff.png` and `side.png`
   (old | new | diff) under `out/shots/<size>/<route>/`, plus `report.md` and `report.json`.
   In `diff.png` red is a difference outside text, yellow a difference inside text, blue is

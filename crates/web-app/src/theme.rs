@@ -3,7 +3,8 @@
 //! browser between Light and Dark. The palettes themselves are RemedyUI's
 //! `remedy_ui_themes::portal_theme`, token for token from themes.ts.
 
-use remedy_ui::style::{States, StylePatch, StyleSheet, Theme};
+use remedy_ui::core::Color;
+use remedy_ui::style::{Gradient, LineHeight, Shadow, States, StylePatch, StyleSheet, Theme};
 use remedy_ui::themes::{portal_page_layers, portal_sheet, portal_theme};
 
 /// The old page's localStorage key, shared with it (`/` and `/next/` are one origin): the
@@ -67,16 +68,89 @@ pub fn resolve(id: &str, prefers_dark: Option<bool>) -> Theme {
 }
 
 /// Portal's sheet, plus `portal_page`: the page's background color under its two gold glows
-/// (styles.css `html, body`).
+/// (styles.css `html, body`), and the shell's and the shared widgets' own rules.
 pub fn sheet(t: &Theme) -> StyleSheet {
     let mut s = portal_sheet(t);
     s.rule(
         "portal_page",
         None,
         States::NONE,
-        StylePatch::default().background(t.colors.bg).background_layers(portal_page_layers()),
+        StylePatch::default()
+            .background(t.colors.bg)
+            .background_layers(portal_page_layers())
+            .line_height(LineHeight::Relative(1.5)),
     );
+    let k = Look::of(t);
+    // h1, h2, h3 (styles.css): the heading face at 400, 32 / 24 / 16 px.
+    for (v, px, lh) in [("1", 32.0, 1.2), ("2", 24.0, 1.25), ("3", 16.0, 1.4)] {
+        let p = StylePatch::default()
+            .heading(true)
+            .weight(400.0)
+            .text_size(px)
+            .foreground(k.text)
+            .line_height(LineHeight::Relative(lh));
+        s.rule("heading", Some(v), States::NONE, p);
+    }
+    s.rule("label", Some("muted"), States::NONE, StylePatch::default().foreground(k.muted));
+    s.rule("label", Some("error"), States::NONE, StylePatch::default().foreground(k.error));
+    crate::shell::rules(&mut s, &k);
+    crate::widgets::rules(&mut s, &k);
     s
+}
+
+/// Portal's CSS variables (styles.css `:root`, themes.ts), read off the theme.
+#[derive(Clone, Debug)]
+pub struct Look {
+    pub bg: Color,
+    pub raised: Color,
+    pub well: Color,
+    pub line: Color,
+    pub text: Color,
+    pub muted: Color,
+    pub gold: Color,
+    pub error: Color,
+    pub track: Color,
+    /// `--shadow`: 0 12px 32px black at 28%.
+    pub shadow: Shadow,
+    /// `--shadow-lift`: 0 18px 40px black at 36%.
+    pub shadow_lift: Shadow,
+}
+
+impl Look {
+    pub fn of(t: &Theme) -> Look {
+        let c = &t.colors;
+        let custom = |k: &str, or: Color| c.custom.get(k).copied().unwrap_or(or);
+        let line = c.line.unwrap_or(c.muted);
+        Look {
+            bg: c.bg,
+            raised: custom("raised", c.panel),
+            well: custom("well", c.card),
+            line,
+            text: c.text,
+            muted: c.muted,
+            gold: custom("gold", c.accent),
+            error: c.danger,
+            track: custom("track", line),
+            shadow: Shadow::new(0.0, 12.0, 32.0, mix(Color::BLACK, 0.28, Color::TRANSPARENT)),
+            shadow_lift: Shadow::new(0.0, 18.0, 40.0, mix(Color::BLACK, 0.36, Color::TRANSPARENT)),
+        }
+    }
+}
+
+/// CSS `color-mix(in srgb, a p, b)`: premultiplied, channel by channel in sRGB.
+pub fn mix(a: Color, p: f32, b: Color) -> Color {
+    let q = 1.0 - p;
+    let alpha = a.a * p + b.a * q;
+    if alpha <= 0.0 {
+        return Color::TRANSPARENT;
+    }
+    let ch = |x: f32, y: f32| (x * a.a * p + y * b.a * q) / alpha;
+    Color::new(ch(a.r, b.r), ch(a.g, b.g), ch(a.b, b.b), alpha)
+}
+
+/// One of Portal's CSS backgrounds as written (it may name `var(--gold)` and the like).
+pub fn gradient(css: &str) -> Vec<Gradient> {
+    Gradient::parse_layers(css).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -89,6 +163,15 @@ mod tests {
             assert!(portal_theme(palette_id(c.id, None)).is_some(), "{}", c.id);
         }
         assert_eq!(MENU.len(), 14);
+    }
+
+    #[test]
+    fn mixes_like_css_color_mix() {
+        let gold = Color::from_hex("#e2b15a").unwrap();
+        let m = mix(gold, 0.22, Color::TRANSPARENT);
+        assert!((m.r - gold.r).abs() < 1e-6 && (m.a - 0.22).abs() < 1e-6);
+        let m = mix(Color::WHITE, 0.5, Color::BLACK);
+        assert!((m.r - 0.5).abs() < 1e-6 && m.a == 1.0);
     }
 
     #[test]
