@@ -1,0 +1,26 @@
+[package]
+name = "portal-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Portal's dashboard on RemedyUI, built for the browser (served at /next/)"
+
+# The page is built from the binary (`cargo remedy package --target web` builds `--bin`);
+# the library is also a cdylib so a page can load it as a module of its own.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "portal-web"
+path = "src/main.rs"
+
+[dependencies]
+portal-api.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# A path dependency on a clean RemedyUI main checkout beside this repo, during the port.
+remedy-ui = { path = "../../../../remedyui-main/crates/remedy-ui", features = ["web", "net", "widgets", "image", "svg", "playback", "webstorage"] }
+# Portal's faces: Remedy Sans (text), Ahmi Pixel (headings) and AhmiPrint, beside the
+# engine's Remedy Sans UI. Turning the features on here adds them to every window.
+remedy-ui-fonts = { path = "../../../../remedyui-main/crates/remedy-ui-fonts", features = ["remedy-sans", "ahmi-pixel", "ahmi-print"] }
