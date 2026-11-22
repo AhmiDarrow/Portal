@@ -339,3 +339,36 @@ fn a_settings_window_kodi_opened_names_its_add_on() {
     assert_eq!(plugin_addon("special://home"), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn the_next_page_is_served_beside_the_old_one() {
+    let dir = std::env::temp_dir().join(format!("portal-next-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.html"), "<p>next</p>").unwrap();
+    std::fs::write(dir.join("app_bg.wasm"), b"\0asm\x01\0\0\0").unwrap();
+    let old = axum::Router::new().route("/", get(|| async { "old" }));
+    let app = serve_next(old, &dir);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.ok() });
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    let get = |path: &str| client.get(format!("{base}{path}")).send();
+    assert_eq!(get("/").await.unwrap().text().await.unwrap(), "old");
+    assert_eq!(get("/next/").await.unwrap().text().await.unwrap(), "<p>next</p>");
+    let moved = get("/next").await.unwrap();
+    assert_eq!(moved.status(), StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(moved.headers()[header::LOCATION], "/next/");
+    let wasm = get("/next/app_bg.wasm").await.unwrap();
+    assert_eq!(wasm.headers()[header::CONTENT_TYPE], "application/wasm");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn wasm_is_compressed() {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/wasm"));
+    let none = axum::http::Extensions::new();
+    assert!(compressible(StatusCode::OK, axum::http::Version::HTTP_11, &headers, &none));
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("video/mp2t"));
+    assert!(!compressible(StatusCode::OK, axum::http::Version::HTTP_11, &headers, &none));
+}

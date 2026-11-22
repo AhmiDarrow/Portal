@@ -47,6 +47,7 @@ mod backup;
 mod cast;
 mod early;
 mod guard;
+mod image_proxy;
 mod job;
 mod metadata;
 mod packs;
@@ -74,6 +75,8 @@ struct Inner {
     picking: Mutex<HashMap<String, u32>>,
     /// Whole-season files already chosen, so the next episode prefers the same file.
     packs: Mutex<packs::SeasonPacks>,
+    /// Pictures from other sites for pages that cannot load them cross-site.
+    image_proxy: image_proxy::ImageProxy,
     /// Flips to true once when Portal starts shutting down.
     stopping: tokio::sync::watch::Sender<bool>,
 }
@@ -180,6 +183,13 @@ async fn static_cache(
     response
 }
 
+/// Serves the page in `dir` at `/next/` (and sends `/next` there, so its relative
+/// addresses resolve inside it).
+fn serve_next(app: axum::Router, dir: &std::path::Path) -> axum::Router {
+    app.route("/next", get(|| async { axum::response::Redirect::permanent("/next/") }))
+        .nest_service("/next/", ServeDir::new(dir).append_index_html_on_directories(true))
+}
+
 /// Text is worth compressing; video, pictures and event streams are not,
 /// and a byte range must stay the bytes asked for.
 fn compressible(
@@ -198,6 +208,8 @@ fn compressible(
         && (kind.starts_with("text/")
             || kind.starts_with("application/json")
             || kind.starts_with("application/javascript")
+            || kind.starts_with("application/wasm")
+            || kind.starts_with("application/manifest+json")
             || kind.starts_with("image/svg+xml"))
 }
 
@@ -322,6 +334,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         prefs: Mutex::new(prefs::PrefsStore::open(&portal_dir)),
         picking: Mutex::new(HashMap::new()),
         packs: Mutex::new(packs::SeasonPacks::open(&portal_dir)),
+        image_proxy: image_proxy::ImageProxy::new(image_proxy::Limits::from_env()),
         stopping: tokio::sync::watch::Sender::new(false),
     }));
 
@@ -440,6 +453,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             post(repo_install_addon),
         )
         .route("/api/image", get(image))
+        .route("/api/image/web", get(image_proxy::image_web))
         .route("/api/pair/me", get(pairing::me))
         .route("/api/pair/start", post(pairing::start))
         .route("/api/pair/status", get(pairing::status))
@@ -452,6 +466,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
+    // The RemedyUI build of the dashboard, beside the old one while the port runs.
+    let next = paths::web_next_dist();
+    if next.join("index.html").is_file() {
+        app = serve_next(app, &next);
+    }
     let dist = paths::web_dist();
     if dist.join("index.html").is_file() {
         app = app.fallback_service(ServeDir::new(&dist).append_index_html_on_directories(true));
@@ -473,6 +492,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     clear_dir(&portal_dir.join("hls"));
     tracing::info!("Portal listening on http://{bind}");
     tracing::info!("Dashboard {}", dist.display());
+    tracing::info!("Next dashboard {} at /next/", next.display());
     if let Some(url) = cast_url {
         tracing::info!("Cast url {url}");
     }
