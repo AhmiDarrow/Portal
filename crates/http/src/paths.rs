@@ -150,6 +150,24 @@ pub fn web_dist() -> PathBuf {
     )
 }
 
+/// The RemedyUI build of the dashboard, served at `/next/`: `PORTAL_WEB_NEXT_DIST`, else
+/// `web-next` beside the program, else what `tools/build-web-app.ps1` writes in a checkout.
+pub fn web_next_dist() -> PathBuf {
+    if let Some(dir) = env_path("PORTAL_WEB_NEXT_DIST") {
+        return dir;
+    }
+    let mut candidates = Vec::new();
+    if let Some(dir) = install_dir() {
+        candidates.push(dir.join("web-next"));
+    }
+    candidates.push(source_root().join("target").join("remedy").join("web").join("portal-web"));
+    first(
+        candidates,
+        |dir| dir.join("index.html").is_file(),
+        PathBuf::from("web-next"),
+    )
+}
+
 pub fn vendor_hls() -> PathBuf {
     if let Some(path) = env_path("PORTAL_HLS_JS") {
         return path;
