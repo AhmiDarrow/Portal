@@ -14,7 +14,7 @@ use remedy_ui::reactive::{untrack, Signal};
 use remedy_ui::style::{LineHeight, Shadow, States, StylePatch, StyleSheet};
 use remedy_ui::view::RichText;
 use remedy_ui::widgets::{self as w, Icon};
-use remedy_ui::{show, El, Ui};
+use remedy_ui::{El, Ui};
 
 use super::{episodes, human_title, next_detail, next_is_episode, Dock};
 use crate::api::List;
@@ -476,27 +476,33 @@ fn quality_field(d: &Dock) -> El {
 fn audio_field(d: &Dock) -> El {
     let i = d.inner();
     let (u, audio, me) = (i.ui.clone(), i.audio, d.clone());
-    let menu = show(&i.ui, || true, move || {
+    // Rebuilt when the file's tracks or the one playing change.
+    let menu = i.ui.el("p_dock_audio").row();
+    let m2 = menu.clone();
+    let menu = menu.bind(move || {
         let (tracks, chosen) = audio.get();
-        let names: Vec<String> = if tracks.is_empty() { vec!["Audio".into()] } else { tracks.iter().map(|t| t.label.clone()).collect() };
-        let at = chosen.and_then(|c| tracks.iter().position(|t| t.index == c)).unwrap_or(0);
-        let shown = Signal::new(at);
-        let tip = if tracks.len() < 2 { names[0].clone() } else { "Audio track".into() };
-        let s = w::select(&u, "Audio", names, shown).variant("dock").disabled(tracks.len() < 2);
-        w::tooltip(&s, tip);
-        let (me2, tracks2) = (me.clone(), tracks.clone());
-        let first = Cell::new(true);
-        s.bind(move || {
-            let n = shown.get();
-            if first.replace(false) {
-                return;
-            }
-            if let Some(t) = tracks2.get(n) {
-                untrack(|| me2.choose_audio(t.index));
-            }
-        })
-    })
-    .el();
+        untrack(|| {
+            m2.clear();
+            let names: Vec<String> = if tracks.is_empty() { vec!["Audio".into()] } else { tracks.iter().map(|t| t.label.clone()).collect() };
+            let at = chosen.and_then(|c| tracks.iter().position(|t| t.index == c)).unwrap_or(0);
+            let shown = Signal::new(at);
+            let tip = if tracks.len() < 2 { names[0].clone() } else { "Audio track".into() };
+            let s = w::select(&u, "Audio", names, shown).variant("dock").disabled(tracks.len() < 2);
+            w::tooltip(&s, tip);
+            let (me2, tracks2) = (me.clone(), tracks.clone());
+            let first = Cell::new(true);
+            let s = s.bind(move || {
+                let n = shown.get();
+                if first.replace(false) {
+                    return;
+                }
+                if let Some(t) = tracks2.get(n) {
+                    untrack(|| me2.choose_audio(t.index));
+                }
+            });
+            let _ = m2.clone().child(s);
+        });
+    });
     field(&i.ui, "Audio", menu)
 }
 
@@ -563,7 +569,7 @@ fn side(d: &Dock) -> El {
     let prefs = ui.el("p_dock_prefs_box").column().child(rule).child(prefs).bind(move || {
         let wide = theater.get() && pl.is_theater();
         let _ = r2.clone().hidden(wide);
-        let _ = p2.clone().layout(move |l| l.padding.top = if wide { 0.0 } else { 10.4 });
+        let _ = p2.clone().padding(Insets { top: if wide { 0.0 } else { 10.4 }, ..Insets::ZERO });
     });
     // body.theater .dock-side { border-top: 1px solid var(--line) }.
     let (theater, pl) = (d.inner().theater, d.inner().player.clone());
@@ -685,14 +691,14 @@ pub fn dock(d: &Dock) -> El {
                     l.axis = remedy_ui::layout::Axis::Column;
                     l.align_items = Align::Stretch;
                     l.gap = (9.6, 9.6);
-                    l.padding = Insets::all(8.0);
+                    
                 }
                 Mode::Normal => {
                     l.inset = Insets { top: AUTO, start: 11.2, end: 11.2, bottom: 11.2 };
                     l.axis = remedy_ui::layout::Axis::Row;
                     l.align_items = Align::Start;
                     l.gap = (16.0, 16.0);
-                    l.padding = Insets::all(12.0);
+                    
                 }
                 Mode::Mini => {
                     l.inset = if narrow {
@@ -706,7 +712,7 @@ pub fn dock(d: &Dock) -> El {
                     l.axis = remedy_ui::layout::Axis::Column;
                     l.align_items = Align::Stretch;
                     l.gap = (0.0, 0.0);
-                    l.padding = Insets::all(8.0);
+                    
                 }
                 Mode::Theater => {
                     l.inset = Insets { top: head_h, start: 0.0, end: 0.0, bottom: 0.0 };
@@ -714,7 +720,7 @@ pub fn dock(d: &Dock) -> El {
                     l.columns = if show_side { vec![Track::MaxContent, Track::MinMax(Box::new(Track::Px(0.0)), Box::new(Track::Fr(1.0)))] } else { vec![Track::MinMax(Box::new(Track::Px(0.0)), Box::new(Track::Fr(1.0)))] };
                     l.rows = vec![Track::MinMax(Box::new(Track::Px(0.0)), Box::new(Track::Fr(1.0))), Track::MaxContent];
                     l.gap = (0.0, 0.0);
-                    l.padding = Insets::ZERO;
+                    
                     l.align_items = Align::Stretch;
                 }
                 Mode::Full => {
@@ -722,9 +728,16 @@ pub fn dock(d: &Dock) -> El {
                     l.axis = remedy_ui::layout::Axis::Column;
                     l.align_items = Align::Stretch;
                     l.gap = (0.0, 0.0);
-                    l.padding = Insets::ZERO;
+                    
                 }
             }
+        });
+        // Padding is the element's style (a layout padding would lose to the sheet's).
+        let _ = r2.clone().padding(match mode {
+            Mode::Normal if narrow => Insets::all(8.0),
+            Mode::Normal => Insets::all(12.0),
+            Mode::Mini => Insets::all(8.0),
+            Mode::Theater | Mode::Full => Insets::ZERO,
         });
         let col = if show_side { 2 } else { 1 };
         let _ = ts2.clone().layout(move |l| {
