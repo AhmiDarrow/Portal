@@ -171,8 +171,7 @@ fn details(ui: &Ui, ctx: &Ctx, title: &TitleDetail, phone: bool) -> El {
             })
             .child(w::heading(ui, 2, name).variant("season").layout(|l| {
                 l.margin = Insets { top: 3.2, bottom: 0.0, start: 0.0, end: 0.0 };
-                l.padding.bottom = 6.4;
-            }))
+            }).padding(Insets { top: 0.0, bottom: 6.4, start: 0.0, end: 0.0 }))
             // `.season > h2`'s border-bottom, with its 0.6rem margin under it.
             .child(ui.el("p_season_rule").height(1.0).fill_width().layout(|l| {
                 l.shrink = 0.0;
@@ -233,10 +232,10 @@ fn episode_row(ui: &Ui, ctx: &Ctx, title: &TitleDetail, e: &Episode, phone: bool
             l.columns = if phone { vec![Track::Px(88.0), Track::Fr(1.0)] } else { vec![Track::Px(120.0), Track::Fr(1.0), Track::MaxContent] };
             l.gap = (11.2, 11.2);
             l.align_items = Align::Center;
-            l.padding = Insets { top: 9.92, bottom: 9.92, start: 12.0, end: 12.0 };
             l.margin = Insets { top: 7.2, bottom: 7.2, start: 0.0, end: 0.0 };
             l.shrink = 0.0;
         })
+        .padding(Insets { top: 9.92, bottom: 9.92, start: 12.0, end: 12.0 })
         .child(thumb)
         .child(name)
         .child(actions)
@@ -268,7 +267,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         none,
         StylePatch::default().border(k.line).border_width(1.0).radius(14.0).shadow(k.shadow),
     );
-    s.rule("heading", Some("season"), none, StylePatch::default().heading(true).weight(400.0).text_size(24.0).foreground(k.text));
+    s.rule("heading", Some("season"), none, StylePatch::default().heading(true).weight(400.0).text_size(24.0).foreground(k.text).line_height(remedy_ui::style::LineHeight::Relative(1.25)));
     s.rule(
         "p_episode",
         None,

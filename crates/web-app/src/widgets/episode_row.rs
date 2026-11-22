@@ -226,9 +226,9 @@ pub fn episode_row(ui: &Ui, r: EpisodeRow, phone: bool) -> El {
             };
             l.gap = if phone { (9.6, 9.6) } else { (16.0, 16.0) };
             l.align_items = Align::Start;
-            l.padding = Insets::all(11.2);
             l.shrink = 0.0;
         })
+        .padding(Insets::all(11.2))
         .semantics(Semantics::new(Role::Article))
         .child(thumb)
         .child(body)
@@ -296,8 +296,8 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         none,
         StylePatch::default().foreground(k.muted).text_size(13.6).letter_spacing(remedy_ui::style::LetterSpacing::Em(0.02)),
     );
-    s.rule("heading", Some("ep"), none, StylePatch::default().heading(true).weight(400.0).text_size(19.2).foreground(k.text));
-    s.rule("p_ep_plot", None, none, StylePatch::default().foreground(mix(k.text, 0.82, k.muted)).text_size(14.88));
+    s.rule("heading", Some("ep"), none, StylePatch::default().heading(true).weight(400.0).text_size(19.2).foreground(k.text).line_height(remedy_ui::style::LineHeight::Relative(1.25)));
+    s.rule("p_ep_plot", None, none, StylePatch::default().foreground(mix(k.text, 0.82, k.muted)).text_size(14.88).line_height(remedy_ui::style::LineHeight::Relative(1.45)));
     // .ep-go: the gold Play pill; solid gold under the pointer.
     let go_border = mix(k.gold, 0.45, k.line);
     s.rule("p_pill", Some("go"), none, StylePatch::default().foreground(k.gold).border(go_border));
