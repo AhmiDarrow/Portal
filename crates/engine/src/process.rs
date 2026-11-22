@@ -128,7 +128,7 @@ fn percent_decode(text: &str) -> String {
 
 /// An http(s) address whose host is a public name or address: not this PC,
 /// not the home network, and with no login in it.
-fn public_web_host(url: &str) -> bool {
+pub fn public_web_host(url: &str) -> bool {
     let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or("");
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
     if authority.is_empty() || authority.contains('@') {
@@ -163,7 +163,7 @@ fn public_web_host(url: &str) -> bool {
 
 /// An address on the internet: not this PC, the home network, or a range
 /// that is not one machine.
-fn public_ip(ip: std::net::IpAddr) -> bool {
+pub fn public_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(ip) => {
             let shared = ip.octets()[0] == 100 && (64..128).contains(&ip.octets()[1]);

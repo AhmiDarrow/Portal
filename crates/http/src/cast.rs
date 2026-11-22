@@ -16,6 +16,14 @@ use serde::{Deserialize, Serialize};
 
 mod watch;
 
+use portal_api::{
+    CastBody, CastCommand, CastCommandPut as CommandPut, CastDevice as DeviceItem,
+    CastDeviceList as DeviceList, CastDeviceView as DeviceView, CastLanPut as LanPut, CastPlace,
+    CastPlacePut as PlacePut, CastPlayBody as DevicePlayBody, CastPresencePut as PresencePut,
+    CastReceiver as ReceiverItem, CastReceiverList as ReceiverList, CastReplay,
+    CastSessionPut as SessionPut, CastSessionView as SessionView, CastSubtitle,
+    CastVolumeBody as DeviceVolumeBody, LostCast, ReplayFields, SeekBody as DeviceSeekBody,
+};
 use watch::{DeviceRef, DeviceState, Update, Watched};
 
 const DISCOVER_LIMIT: Duration = Duration::from_secs(30);
@@ -94,42 +102,6 @@ struct DeviceRecord {
     port: u16,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(super) struct CastReplay {
-    pub kind: String,
-    pub id: String,
-    pub file: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub season: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub episode: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub art: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show_title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show_id: Option<String>,
-}
-
-/// Where the browser TV is, in source seconds. The dashboard clock follows this.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub(super) struct CastPlace {
-    position: f64,
-    duration: f64,
-    paused: bool,
-    updated_ms: u64,
-}
-
-/// One instruction for the browser TV. `seq` rises so the TV applies it once.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub(super) struct CastCommand {
-    seq: u64,
-    action: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    seconds: Option<f64>,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 struct CastSession {
     receiver_id: String,
@@ -139,16 +111,6 @@ struct CastSession {
     place: Option<CastPlace>,
     command: Option<CastCommand>,
     next_seq: u64,
-}
-
-/// A browser cast that ended because its TV went quiet. The dashboard
-/// following it says so and resumes from the TV's last reported place.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub(super) struct LostCast {
-    receiver_id: String,
-    job_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    place: Option<CastPlace>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -207,69 +169,6 @@ struct DeviceSlot {
     /// Sending true ends the watch.
     cancel: tokio::sync::watch::Sender<bool>,
     view: DeviceView,
-}
-
-/// `GET /api/cast/device`: the device cast as its watch last saw it. Times are
-/// in the source's seconds, like the dashboard's clock.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub(super) struct DeviceView {
-    /// False once the cast ended; `state` and `note` then say how.
-    pub active: bool,
-    pub device_id: Option<String>,
-    pub device_name: Option<String>,
-    pub job_id: Option<String>,
-    pub title: Option<String>,
-    /// What is playing, so a page can show it and play it again.
-    pub item: Option<CastReplay>,
-    pub state: Option<DeviceState>,
-    pub position: Option<f64>,
-    pub duration: Option<f64>,
-    /// Where in the source the device's stream starts; device seeks are relative to it.
-    pub origin: f64,
-    pub note: Option<String>,
-    pub updated_ms: u64,
-    /// The subtitle the TV shows, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtitle: Option<CastSubtitle>,
-    /// The play job that subtitle belongs to; another job (the next episode)
-    /// needs its own, found by language.
-    #[serde(skip)]
-    pub subtitle_job: Option<String>,
-    /// The language the user wants on the TV, kept across episodes while the
-    /// next one's subtitle is still being found.
-    #[serde(skip)]
-    pub subtitle_lang: Option<String>,
-    /// Portal is still finding or sending a subtitle in that language for this job.
-    pub subtitle_pending: bool,
-    /// The TV's own volume, 0 to 1, as its last status line said.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub volume: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub muted: Option<bool>,
-}
-
-/// A subtitle a cast shows: a track in the video, or one from the online search.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "lowercase")]
-pub(super) enum CastSubtitle {
-    Embedded {
-        id: u32,
-        #[serde(default)]
-        lang: Option<String>,
-    },
-    Online {
-        id: String,
-        #[serde(default)]
-        lang: Option<String>,
-    },
-}
-
-impl CastSubtitle {
-    fn lang(&self) -> Option<&str> {
-        match self {
-            Self::Embedded { lang, .. } | Self::Online { lang, .. } => lang.as_deref(),
-        }
-    }
 }
 
 fn same_lang(track: Option<&str>, wanted: &str) -> bool {
@@ -444,182 +343,39 @@ fn subtitle_address_in(
     }
 }
 
-impl DeviceView {
-    fn empty() -> Self {
-        Self {
-            active: false,
-            device_id: None,
-            device_name: None,
-            job_id: None,
-            title: None,
-            item: None,
-            state: None,
-            position: None,
-            duration: None,
-            origin: 0.0,
-            note: None,
-            updated_ms: 0,
-            subtitle: None,
-            subtitle_job: None,
-            subtitle_lang: None,
-            subtitle_pending: false,
-            volume: None,
-            muted: None,
-        }
+fn session_view(session: &CastSession) -> SessionView {
+    let mut view = SessionView {
+        receiver_id: Some(session.receiver_id.clone()),
+        job_id: Some(session.job_id.clone()),
+        title: session.title.clone(),
+        kind: None,
+        id: None,
+        file: None,
+        season: None,
+        episode: None,
+        art: None,
+        show_title: None,
+        show_id: None,
+        place: session.place.clone(),
+        command: session.command.clone(),
+        lost: None,
+    };
+    if let Some(replay) = &session.replay {
+        view.kind = Some(replay.kind.clone());
+        view.id = Some(replay.id.clone());
+        view.file = Some(replay.file.clone());
+        view.title = session
+            .title
+            .clone()
+            .filter(|text| !text.is_empty())
+            .or_else(|| Some(replay.title.clone()));
+        view.season = replay.season;
+        view.episode = replay.episode;
+        view.art = replay.art.clone();
+        view.show_title = replay.show_title.clone();
+        view.show_id = replay.show_id.clone();
     }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(super) struct ReceiverItem {
-    pub id: String,
-    pub name: String,
-    pub seen_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(super) struct ReceiverList {
-    pub items: Vec<ReceiverItem>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub(super) struct SessionView {
-    pub receiver_id: Option<String>,
-    pub job_id: Option<String>,
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub file: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub season: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub episode: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub art: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show_title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show_id: Option<String>,
-    /// Where the browser TV is. Absent until it reports.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub place: Option<CastPlace>,
-    /// The dashboard's latest play, pause, or seek. The TV applies `seq` once.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<CastCommand>,
-    /// With no session: the one that ended because its TV went quiet.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lost: Option<LostCast>,
-}
-
-impl SessionView {
-    fn empty() -> Self {
-        Self {
-            receiver_id: None,
-            job_id: None,
-            title: None,
-            kind: None,
-            id: None,
-            file: None,
-            season: None,
-            episode: None,
-            art: None,
-            show_title: None,
-            show_id: None,
-            place: None,
-            command: None,
-            lost: None,
-        }
-    }
-
-    fn from_session(session: &CastSession) -> Self {
-        let mut view = Self {
-            receiver_id: Some(session.receiver_id.clone()),
-            job_id: Some(session.job_id.clone()),
-            title: session.title.clone(),
-            kind: None,
-            id: None,
-            file: None,
-            season: None,
-            episode: None,
-            art: None,
-            show_title: None,
-            show_id: None,
-            place: session.place.clone(),
-            command: session.command.clone(),
-            lost: None,
-        };
-        if let Some(replay) = &session.replay {
-            view.kind = Some(replay.kind.clone());
-            view.id = Some(replay.id.clone());
-            view.file = Some(replay.file.clone());
-            view.title = session
-                .title
-                .clone()
-                .filter(|text| !text.is_empty())
-                .or_else(|| Some(replay.title.clone()));
-            view.season = replay.season;
-            view.episode = replay.episode;
-            view.art = replay.art.clone();
-            view.show_title = replay.show_title.clone();
-            view.show_id = replay.show_id.clone();
-        }
-        view
-    }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub(super) struct CastBody {
-    pub lan: bool,
-    pub bind: String,
-    pub url: Option<String>,
-    pub receivers: Vec<ReceiverItem>,
-    pub session: Option<SessionView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub restart_needed: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct LanPut {
-    lan: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct PresencePut {
-    id: String,
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct SessionPut {
-    receiver_id: String,
-    job_id: String,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(flatten)]
-    replay: ReplayFields,
-}
-
-/// What a page sends so the item can be shown and played again.
-#[derive(Debug, Default, Deserialize)]
-pub(super) struct ReplayFields {
-    #[serde(default)]
-    kind: Option<String>,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    file: Option<String>,
-    #[serde(default)]
-    season: Option<u32>,
-    #[serde(default)]
-    episode: Option<u32>,
-    #[serde(default)]
-    art: Option<String>,
-    #[serde(default)]
-    show_title: Option<String>,
-    #[serde(default)]
-    show_id: Option<String>,
+    view
 }
 
 impl CastHub {
@@ -675,7 +431,7 @@ impl CastHub {
         let now = Instant::now();
         self.expire_session(now);
         let receivers = self.receiver_items(now);
-        let session = self.session.as_ref().map(SessionView::from_session);
+        let session = self.session.as_ref().map(session_view);
         let restart_needed = restart_needed.or_else(|| {
             let pending = self::restart_needed(self.bound_lan, self.settings.lan);
             pending.then_some(true)
@@ -730,10 +486,10 @@ impl CastHub {
     fn session_view(&self) -> SessionView {
         self.session
             .as_ref()
-            .map(SessionView::from_session)
+            .map(session_view)
             .unwrap_or_else(|| SessionView {
                 lost: self.lost.clone(),
-                ..SessionView::empty()
+                ..SessionView::default()
             })
     }
 
@@ -1014,7 +770,7 @@ impl CastHub {
         self.device
             .as_ref()
             .map(|slot| slot.view.clone())
-            .unwrap_or_else(DeviceView::empty)
+            .unwrap_or_else(DeviceView::default)
     }
 
     fn device_endpoint(&self, id: &str) -> Option<DeviceEndpoint> {
@@ -1234,20 +990,6 @@ pub(super) async fn cast_session_delete(
     Json(portal_api::OkBody { ok: true })
 }
 
-#[derive(Debug, Deserialize)]
-pub(super) struct PlacePut {
-    position: f64,
-    duration: f64,
-    paused: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct CommandPut {
-    action: String,
-    #[serde(default)]
-    seconds: Option<f64>,
-}
-
 pub(super) async fn cast_session_place(
     State(state): State<super::AppState>,
     Json(body): Json<PlacePut>,
@@ -1280,55 +1022,6 @@ pub(super) async fn cast_session_command(
             "That cast control is not valid.",
         )),
     }
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(super) struct DeviceItem {
-    pub id: String,
-    pub name: String,
-    pub host: String,
-    pub model: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(super) struct DeviceList {
-    pub items: Vec<DeviceItem>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct DevicePlayBody {
-    #[serde(default)]
-    url: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    thumb: Option<String>,
-    /// The play job being cast. With it, Portal watches the device and plays
-    /// the next episode when this one finishes.
-    #[serde(default)]
-    job_id: Option<String>,
-    /// Where in the stream the device starts, in seconds (the browser's place).
-    #[serde(default)]
-    start: Option<f64>,
-    /// The subtitle the dashboard shows, sent along to the TV.
-    #[serde(default)]
-    subtitle: Option<CastSubtitle>,
-    #[serde(flatten)]
-    replay: ReplayFields,
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct DeviceSeekBody {
-    seconds: f64,
-}
-
-/// The TV's own volume, 0 to 1, and mute; either may be left out.
-#[derive(Debug, Deserialize)]
-pub(super) struct DeviceVolumeBody {
-    #[serde(default)]
-    level: Option<f64>,
-    #[serde(default)]
-    muted: Option<bool>,
 }
 
 pub(super) async fn cast_devices(
@@ -3486,10 +3179,7 @@ struct AppBackend {
 }
 
 fn api_detail(err: &super::ApiError) -> String {
-    err.1
-         .0
-        .get("detail")
-        .and_then(|item| item.as_str())
+    Some(err.1 .0.detail.as_str())
         .map(clean_label)
         .filter(|text| !text.is_empty())
         .unwrap_or_else(|| "Playback failed.".into())

@@ -23,8 +23,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use portal_api::{
+    ActionBody, AudioBody, ErrorBody, HistoryName, HistoryTitle, IncomingFile, Ping, ProgressBody,
+    QualityBody, RunBody, SeekBody, ZipInstall,
     AddonList, AddonUpdates, BrowsePage, CardList, HistoryList, Home, InstallResult, JobState, ListPut, OkBody,
-    PlayAccepted, PlayJob, PlayKind, PlayRequest, ProgressReport, Prompt, PromptAction,
+    PlayAccepted, PlayJob, PlayKind, PlayRequest, Prompt, PromptAction,
     PromptAnswer, PromptBody, PromptKind, RemoveResult, RepoDetail, RepoList, SavedMap, SavedQuery,
     SettingWrite, SettingsDoc, Source, Status, TitleDetail, TitleKind, WindowRequest,
 };
@@ -45,6 +47,7 @@ mod backup;
 mod cast;
 mod early;
 mod guard;
+mod image_proxy;
 mod job;
 mod metadata;
 mod packs;
@@ -72,6 +75,8 @@ struct Inner {
     picking: Mutex<HashMap<String, u32>>,
     /// Whole-season files already chosen, so the next episode prefers the same file.
     packs: Mutex<packs::SeasonPacks>,
+    /// Pictures from other sites for pages that cannot load them cross-site.
+    image_proxy: image_proxy::ImageProxy,
     /// Flips to true once when Portal starts shutting down.
     stopping: tokio::sync::watch::Sender<bool>,
 }
@@ -92,18 +97,6 @@ struct SearchQuery {
 #[derive(Deserialize)]
 struct ImageQuery {
     path: String,
-}
-
-#[derive(serde::Serialize)]
-struct ActionBody {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    browse_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    settings_addon: Option<String>,
-    /// True when a RunPlugin action was started; the page should watch `/api/prompt`.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    ran: bool,
 }
 
 struct CachedBrowse {
@@ -190,6 +183,13 @@ async fn static_cache(
     response
 }
 
+/// Serves the page in `dir` at `/next/` (and sends `/next` there, so its relative
+/// addresses resolve inside it).
+fn serve_next(app: axum::Router, dir: &std::path::Path) -> axum::Router {
+    app.route("/next", get(|| async { axum::response::Redirect::permanent("/next/") }))
+        .nest_service("/next/", ServeDir::new(dir).append_index_html_on_directories(true))
+}
+
 /// Text is worth compressing; video, pictures and event streams are not,
 /// and a byte range must stay the bytes asked for.
 fn compressible(
@@ -208,6 +208,8 @@ fn compressible(
         && (kind.starts_with("text/")
             || kind.starts_with("application/json")
             || kind.starts_with("application/javascript")
+            || kind.starts_with("application/wasm")
+            || kind.starts_with("application/manifest+json")
             || kind.starts_with("image/svg+xml"))
 }
 
@@ -332,6 +334,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         prefs: Mutex::new(prefs::PrefsStore::open(&portal_dir)),
         picking: Mutex::new(HashMap::new()),
         packs: Mutex::new(packs::SeasonPacks::open(&portal_dir)),
+        image_proxy: image_proxy::ImageProxy::new(image_proxy::Limits::from_env()),
         stopping: tokio::sync::watch::Sender::new(false),
     }));
 
@@ -450,6 +453,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             post(repo_install_addon),
         )
         .route("/api/image", get(image))
+        .route("/api/image/web", get(image_proxy::image_web))
         .route("/api/pair/me", get(pairing::me))
         .route("/api/pair/start", post(pairing::start))
         .route("/api/pair/status", get(pairing::status))
@@ -462,6 +466,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
+    // The RemedyUI build of the dashboard, beside the old one while the port runs.
+    let next = paths::web_next_dist();
+    if next.join("index.html").is_file() {
+        app = serve_next(app, &next);
+    }
     let dist = paths::web_dist();
     if dist.join("index.html").is_file() {
         app = app.fallback_service(ServeDir::new(&dist).append_index_html_on_directories(true));
@@ -483,6 +492,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     clear_dir(&portal_dir.join("hls"));
     tracing::info!("Portal listening on http://{bind}");
     tracing::info!("Dashboard {}", dist.display());
+    tracing::info!("Next dashboard {} at /next/", next.display());
     if let Some(url) = cast_url {
         tracing::info!("Cast url {url}");
     }
@@ -544,12 +554,12 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(4);
 
 /// Identifies this service to the desktop launcher. The pid lets a stop wait
 /// for the process to exit (it quits Kodi after the port closes).
-async fn ping() -> Json<serde_json::Value> {
-    Json(json!({
-        "app": "portal",
-        "version": env!("CARGO_PKG_VERSION"),
-        "pid": std::process::id(),
-    }))
+async fn ping() -> Json<Ping> {
+    Json(Ping {
+        app: "portal".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        pid: std::process::id(),
+    })
 }
 
 /// Loopback only, and only with the launcher's header: a custom header forces
@@ -628,10 +638,16 @@ async fn read_store<T: Send + 'static>(
         })
 }
 
-type ApiError = (StatusCode, Json<serde_json::Value>);
+type ApiError = (StatusCode, Json<ErrorBody>);
 
 fn fail(code: StatusCode, detail: impl Into<String>) -> ApiError {
-    (code, Json(json!({ "detail": detail.into() })))
+    (
+        code,
+        Json(ErrorBody {
+            detail: detail.into(),
+            pair: None,
+        }),
+    )
 }
 
 fn from_engine(err: EngineError) -> ApiError {
@@ -753,26 +769,8 @@ async fn history_clear(State(state): State<AppState>) -> Result<Json<OkBody>, Ap
     Ok(Json(OkBody { ok: true }))
 }
 
-#[derive(Debug, Deserialize)]
-struct HistoryName {
-    #[serde(default)]
-    name: String,
-    #[serde(flatten)]
-    title: HistoryTitle,
-}
-
 /// The title the page showed at a slot. Rows shift while something plays,
 /// so the slot alone can point at a neighbour.
-#[derive(Debug, Default, Deserialize)]
-struct HistoryTitle {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    season: Option<u32>,
-    #[serde(default)]
-    episode: Option<u32>,
-}
-
 fn history_row(store: &Store, slot: usize, title: &HistoryTitle) -> Option<usize> {
     match title.id.as_deref() {
         Some(id) => store.history_slot(slot, id, title.season, title.episode),
@@ -1011,16 +1009,6 @@ async fn addons(State(state): State<AppState>) -> Result<Json<AddonList>, ApiErr
     Ok(Json(list))
 }
 
-#[derive(Deserialize)]
-struct ProgressBody {
-    #[serde(flatten)]
-    report: ProgressReport,
-    /// Pause, stop, seek, and leaving the page ask to write the file now.
-    /// A steady playhead omits it.
-    #[serde(default)]
-    flush: bool,
-}
-
 async fn progress(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -1121,11 +1109,6 @@ async fn settings_action(
     }))
 }
 
-#[derive(Deserialize)]
-struct RunBody {
-    file: String,
-}
-
 /// Run an add-on row that is not a video, as Kodi does when one is picked:
 /// `RunPlugin`. Playback stays on `/api/play`.
 async fn run_plugin(
@@ -1173,7 +1156,7 @@ const INCOMING_LIMIT: usize = 32 * 1024 * 1024;
 /// The original name is not kept.
 async fn incoming_file(
     mut multipart: axum::extract::Multipart,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Json<IncomingFile>, ApiError> {
     let mut saved: Option<std::path::PathBuf> = None;
     while let Some(field) = multipart
         .next_field()
@@ -1208,9 +1191,9 @@ async fn incoming_file(
     let Some(path) = saved else {
         return Err(fail(StatusCode::BAD_REQUEST, "Choose a file."));
     };
-    Ok(Json(serde_json::json!({
-        "path": path.display().to_string(),
-    })))
+    Ok(Json(IncomingFile {
+        path: path.display().to_string(),
+    }))
 }
 
 fn incoming_extension(name: &str) -> &'static str {
@@ -1916,11 +1899,6 @@ async fn play_stop(
     Ok(Json(OkBody { ok: true }))
 }
 
-#[derive(Deserialize)]
-struct SeekBody {
-    seconds: f64,
-}
-
 async fn play_seek(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
@@ -1933,12 +1911,6 @@ async fn play_seek(
         .await
         .map_err(from_engine)?;
     Ok(Json(job))
-}
-
-#[derive(Deserialize)]
-struct QualityBody {
-    quality: portal_api::Quality,
-    seconds: f64,
 }
 
 async fn play_quality(
@@ -1957,12 +1929,6 @@ async fn play_quality(
     Ok(Json(job))
 }
 
-#[derive(Deserialize)]
-struct AudioBody {
-    index: u32,
-    seconds: f64,
-}
-
 async fn play_audio(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
@@ -1977,13 +1943,6 @@ async fn play_audio(
         .await
         .map_err(from_engine)?;
     Ok(Json(job))
-}
-
-#[derive(Deserialize)]
-struct ZipInstall {
-    url: String,
-    #[serde(default)]
-    name: Option<String>,
 }
 
 async fn repos_list(State(state): State<AppState>) -> Result<Json<RepoList>, ApiError> {
