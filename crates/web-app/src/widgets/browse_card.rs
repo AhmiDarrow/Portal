@@ -73,17 +73,19 @@ pub fn card(ui: &Ui, ctx: &Ctx, folder: &str, item: &BrowseItem, view: Option<&S
         .child(art)
         .child(ui.el("p_card_name").text(label.clone()));
     if !line.is_empty() {
-        play = play.child(ui.el("p_card_kind").text(line));
+        play = play.child(ui.el("p_card_kind").text(line.clone()));
     }
     if let Some((f, _)) = progress.filter(|(f, _)| *f > 0.0) {
         play = play.child(bar(ui, f).layout(|l| l.margin = Insets { top: 0.0, bottom: 0.0, start: 11.2, end: 11.2 }));
     }
+    // The button's name is all it says, as its text reads: "Season 4 Up next S04E02".
+    let name = if line.is_empty() { label.clone() } else { format!("{label} {line}") };
     let (it, o) = (item.clone(), open.clone());
     let play = play
         // .card-play > :last-child: 0.55rem under it.
         .padding(Insets { top: 0.0, bottom: 8.8, start: 0.0, end: 0.0 })
         .on_click(move || o(&it))
-        .semantics(Semantics::new(Role::Button).label(label.clone()).action(Action::Click));
+        .semantics(Semantics::new(Role::Button).label(name).action(Action::Click));
     let mut card = ui
         .el("p_card")
         .variant(if progress.is_some_and(|p| p.1) { "current" } else { "" })
