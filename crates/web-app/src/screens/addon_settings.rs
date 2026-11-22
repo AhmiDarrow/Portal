@@ -242,7 +242,9 @@ fn paint(form: &Rc<Form>, root: &El) {
         })
         .child(w::text(ui, "Add-on settings · ").variant("muted"))
         .child(crate::widgets::link(ui, &ctx.router, &Page::Source.path(), "Back to Source", "", None));
+    // The categories' 1rem collapses with the card's own margin.
     let list = sections::card(ui, "Settings").layout(|l| {
+        l.margin.top = 0.0;
         l.padding.top = 3.2;
         l.padding.bottom = 3.2;
     });
