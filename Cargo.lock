@@ -4247,6 +4247,7 @@ name = "remedy-ui-media-image"
 version = "1.0.0-rc.1"
 dependencies = [
  "image",
+ "js-sys",
  "moxcms",
  "remedy-ui-a11y",
  "remedy-ui-core",
@@ -4256,6 +4257,9 @@ dependencies = [
  "remedy-ui-services-net",
  "remedy-ui-trace",
  "remedy-ui-view",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -4412,11 +4416,13 @@ dependencies = [
  "icu_locale",
  "icu_locale_core",
  "intl-memoizer",
+ "js-sys",
  "remedy-ui-core",
  "remedy-ui-reactive",
  "remedy-ui-view",
  "serde_json",
  "unic-langid",
+ "wasm-bindgen",
  "writeable",
 ]
 

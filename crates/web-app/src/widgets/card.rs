@@ -239,20 +239,12 @@ fn tool_buttons(ui: &Ui, ctx: &Ctx, list: List, item: &Card, editing: Editing, c
     })
     .variant("quiet")
     .semantics(Semantics::new(Role::Button).label(label).action(Action::Click));
-    ui.el("p_row_actions").row().gap(5.6).align(Align::Center).child(rename).child(remove)
+    ui.el("p_row_actions").row().gap(5.6).align(Align::Center).layout(|l| l.wrap = true).child(rename).child(remove)
 }
 
 fn rename_form(ui: &Ui, ctx: &Ctx, list: List, item: &Card, editing: Editing, changed: Rc<dyn Fn()>) -> El {
-    let field = remedy_ui::widgets::text_input(ui, "Name");
-    field.set_value(&item.name);
-    let (c, it, f2, ch) = (ctx.clone(), item.clone(), field.clone(), changed.clone());
-    let save = Rc::new(move || {
-        let name = f2.value().trim().to_owned();
-        if name.is_empty() {
-            c.activity.notice("Enter a name.");
-            f2.el().focus();
-            return;
-        }
+    let (c, it, ch) = (ctx.clone(), item.clone(), changed.clone());
+    let save = Rc::new(move |name: String| {
         if it.id.trim().is_empty() {
             c.activity.notice("That item is gone.");
             editing.set(None);
@@ -269,7 +261,29 @@ fn rename_form(ui: &Ui, ctx: &Ctx, list: List, item: &Card, editing: Editing, ch
             Err(e) => c2.activity.notice(crate::api::shown_detail(&e)),
         });
     });
-    let s2 = save.clone();
+    rename(ui, ctx, &item.name, save, Rc::new(move || {
+        editing.set(None);
+        changed();
+    }))
+}
+
+/// The rename form (main.ts `renameForm`, `.rename`): the name field, focused with its text
+/// selected, then Save and Cancel. `save` gets the trimmed name; an empty one says "Enter a
+/// name." and keeps the field.
+pub fn rename(ui: &Ui, ctx: &Ctx, name: &str, save: Rc<dyn Fn(String)>, cancel: Rc<dyn Fn()>) -> El {
+    let field = remedy_ui::widgets::text_input(ui, "Name");
+    field.set_value(name);
+    let (c, f2) = (ctx.clone(), field.clone());
+    let submit = Rc::new(move || {
+        let name = f2.value().trim().to_owned();
+        if name.is_empty() {
+            c.activity.notice("Enter a name.");
+            f2.el().focus();
+            return;
+        }
+        save(name);
+    });
+    let s2 = submit.clone();
     let input = field.clone().on_submit(move || s2()).el().layout(|l| {
         l.grow = 1.0;
         l.shrink = 1.0;
@@ -287,11 +301,8 @@ fn rename_form(ui: &Ui, ctx: &Ctx, list: List, item: &Card, editing: Editing, ch
         .fill_width()
         .layout(|l| l.wrap = true)
         .child(input)
-        .child(crate::widgets::button(ui, "Save", move || save()))
-        .child(crate::widgets::button(ui, "Cancel", move || {
-            editing.set(None);
-            changed();
-        }))
+        .child(crate::widgets::button(ui, "Save", move || submit()))
+        .child(crate::widgets::button(ui, "Cancel", move || cancel()))
 }
 
 fn ms(n: u64) -> std::time::Duration {
