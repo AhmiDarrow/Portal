@@ -36,7 +36,7 @@ use remedy_ui::playback::{
     UnseenPolicy,
 };
 use remedy_ui::reactive::{untrack, Cancel, Signal};
-use remedy_ui::{El, Ui};
+use remedy_ui::{El, Leaving, Ui};
 
 use crate::screens::prompts;
 use crate::widgets::activity::{describe_play, ActivityView, CancelSpec, Owner, PlayDescription, PlayPhase};
@@ -533,10 +533,18 @@ impl Dock {
         });
         // The page hidden or closed: save the place now, with keepalive so the post outlives
         // the tab (player.ts on visibilitychange and pagehide; the ticker may not run again).
-        // ENGINE GAP: `on_leaving` does not say whether the page is closing or only hidden,
-        // so the job is not stopped here as pagehide does (that would end it on a tab switch).
+        // Closed for good (pagehide not into the back-forward cache): nobody watches the
+        // stream unless a TV plays it, and a transcode left running goes on for an hour or more.
         let w2 = with.clone();
-        self.0.ctx.app.on_leaving(move || w2(&|d| d.post_progress(true, true, None)));
+        self.0.ctx.app.on_leave(move |why| {
+            w2(&|d| {
+                d.post_progress(true, true, None);
+                let job = d.0.st.borrow().job.clone();
+                if let Some(id) = job.filter(|_| why == Leaving::Closing && !d.0.cast.active()) {
+                    d.run(api::stop(&id).keepalive(), |_, _| {});
+                }
+            })
+        });
     }
 
     fn remember_opener(&self) {
