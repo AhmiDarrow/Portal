@@ -40,9 +40,9 @@ impl FontId {
             FontId::RemedySansUi => &["Remedy Sans UI"],
             FontId::AhmiPixel => &["Ahmi Pixel", "Remedy Sans"],
             FontId::AhmiPrint => &["AhmiPrint"],
-            // ENGINE GAP: a page cannot name the browser's own system face (fonts.ts uses
-            // "Segoe UI", system-ui); until it can, this is the engine's default face.
-            FontId::System => &[],
+            // The browser's own `system-ui` face once [`load_system`] has read it; until
+            // then, or where the browser cannot give it, the engine's UI face after it.
+            FontId::System => &["system-ui"],
         };
         f.iter().map(|s| (*s).to_owned()).chain(["Remedy Sans UI".to_owned()]).collect()
     }
@@ -80,9 +80,9 @@ impl Default for Fonts {
 }
 
 impl Fonts {
-    /// This browser's saved choice, as the old page saved it.
-    pub fn saved() -> Fonts {
-        crate::stored::item(KEY).and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default()
+    /// Either face is "System default".
+    pub fn uses_system(self) -> bool {
+        self.text == FontId::System || self.headings == FontId::System
     }
 
     /// Sets the theme's text and heading families to these choices.
@@ -91,6 +91,17 @@ impl Fonts {
         theme.mono_families = theme.font_families.clone();
         theme.heading_families = self.headings.families();
     }
+}
+
+/// Reads the face the browser draws `system-ui` in, for "System default" (call it from the
+/// press that picks it, and at start when it is saved). Firefox, Safari and phones cannot
+/// give it, and the person may decline: then text stays in Remedy Sans UI, as `families` says.
+pub fn load_system(app: &remedy_ui::App) {
+    app.load_system_ui_font(|out| {
+        if let Err(why) = out {
+            eprintln!("System font not available: {why}");
+        }
+    });
 }
 
 #[cfg(test)]
