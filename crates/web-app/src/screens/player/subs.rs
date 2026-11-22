@@ -239,10 +239,30 @@ impl Dock {
             _ => {}
         }
         self.apply_subs();
-        if on() && self.chosen_sub().is_none() {
+        if self.0.cast.current().is_some() {
+            self.sync_device_subs();
+        } else if on() && self.chosen_sub().is_none() {
             let text = self.no_subs_text(true);
             self.sub_note(&text, false);
         }
+    }
+
+    /// player.ts `syncDeviceSubtitles`: while a TV plays, it shows what this page would.
+    fn sync_device_subs(&self) {
+        let Some(dev) = self.0.cast.current() else { return };
+        let choice = if on() { self.cast_subtitle() } else { None };
+        if on() && choice.is_none() {
+            let text = self.no_subs_text(true);
+            return self.sub_note(&text, false);
+        }
+        let shown = choice.is_some();
+        self.run(api::cast_device_subtitles(&dev.id, choice.as_ref()), move |me, out| {
+            match out {
+                Ok(_) if shown => me.sub_note("Subtitles are on for the TV.", false),
+                Ok(_) => me.clear_sub_note(false),
+                Err(e) => me.sub_note(&super::cast::cast_fail(&e), true),
+            }
+        });
     }
 
     fn choice_language(&self, key: &str) -> Option<String> {
@@ -610,8 +630,7 @@ impl Dock {
         }
     }
 
-    /// player.ts `castSubtitle`: the subtitle this page would show, as a TV needs it (P10).
-    #[allow(dead_code)]
+    /// player.ts `castSubtitle`: the subtitle this page would show, as a TV needs it.
     pub(crate) fn cast_subtitle(&self) -> Option<CastSubtitle> {
         let key = self.chosen_sub()?;
         let s = self.subs();
