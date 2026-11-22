@@ -175,7 +175,10 @@ fn load(ctx: &Ctx, path: &str, shown: Signal<Shown>, source: Signal<Option<Brows
 
 /// The search form (`form.search`): the field, Search, and Clear while results show.
 fn search_form(ui: &Ui, ctx: &Ctx, folder: &str, query: Option<&str>, shown: Signal<Shown>) -> El {
-    let field = w::text_input(ui, "Search this add-on").placeholder("Search this add-on");
+    let field = w::text_input(ui, "Search this add-on")
+        .placeholder("Search this add-on")
+        .purpose(remedy_ui::view::InputPurpose::Search)
+        .enter_key(remedy_ui::view::EnterKey::Search);
     if let Some(q) = query {
         field.set_value(q);
     }
