@@ -3,11 +3,10 @@
 //! shows opened from Browse, the library's detail for each show, and from those, whether a
 //! folder is a show's page or one of its seasons ([`page_show`], [`show_view`]).
 //!
-//! The old page keeps the season memory in `sessionStorage` under `portal-seasons`, so it
-//! lasts as long as the tab. ENGINE GAP: RemedyUI cannot read or write a page's
-//! sessionStorage (remedy-ui-services-webstorage reads localStorage only, src/browser.rs),
-//! so here it lasts as long as the page, which is what the old page falls back to when its
-//! storage is refused ("The labels still last for this page view", api.ts `saveMemory`).
+//! The season memory lives in the tab's `sessionStorage` under `portal-seasons`, the same
+//! JSON item the old page keeps, so it lasts as long as the tab and both pages share it
+//! ([`attach`]). Without storage it lasts as long as the page, as the old page falls back
+//! to ("The labels still last for this page view", api.ts `saveMemory`).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -44,6 +43,38 @@ thread_local! {
 
 fn mem<R>(f: impl FnOnce(&mut Memory) -> R) -> R {
     MEMORY.with(|m| f(&mut m.borrow_mut()))
+}
+
+thread_local! {
+    static STORE: RefCell<Option<remedy_ui::reactive::PersistStore>> = const { RefCell::new(None) };
+}
+
+fn seasons_item() -> remedy_ui::reactive::Persist {
+    remedy_ui::reactive::Persist::new("portal-seasons").session()
+}
+
+/// Reads the season memory the tab already has (api.ts `loadMemory`) and keeps it there
+/// from now on.
+pub fn attach(store: Option<remedy_ui::reactive::PersistStore>) {
+    let Some(store) = store else { return };
+    if let Ok(Some(v)) = store.load::<serde_json::Value>(&seasons_item()) {
+        load_memory_json(&v.to_string());
+    }
+    STORE.with(|s| *s.borrow_mut() = Some(store));
+}
+
+/// Changes the memory and saves it (api.ts `saveMemory`); a refused write keeps it for
+/// this page view.
+fn mem_mut<R>(f: impl FnOnce(&mut Memory) -> R) -> R {
+    let out = mem(f);
+    STORE.with(|s| {
+        if let Some(store) = s.borrow().as_ref() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&memory_json()) {
+                let _ = store.save(&seasons_item(), &v);
+            }
+        }
+    });
+    out
 }
 
 /// `^(?:season|series)\s+(\d+)\b`, case-insensitive, on the trimmed label.
@@ -104,7 +135,7 @@ pub fn note_path_label(path: &str, label: &str) {
     if path.is_empty() || label.trim().is_empty() {
         return;
     }
-    mem(|m| m.labels.insert(path.to_owned(), label.trim().to_owned()));
+    mem_mut(|m| m.labels.insert(path.to_owned(), label.trim().to_owned()));
 }
 
 pub fn path_label(path: &str) -> String {
@@ -117,7 +148,7 @@ pub fn remembered_name(id: &str) -> String {
 
 /// What a folder's items say about its show and seasons (api.ts `rememberFolder`).
 pub fn remember_folder(folder: &str, items: &[BrowseItem]) {
-    mem(|m| {
+    mem_mut(|m| {
         if let Some(t) = items.iter().find_map(|i| i.show_title.clone().filter(|s| !s.is_empty())) {
             m.show_name.insert(folder.to_owned(), t);
         }
@@ -146,7 +177,7 @@ pub fn remember_show_seasons(show_id: &str, name: &str, folders: &[SeasonFolder]
         return;
     }
     let named = Some(name.trim()).filter(|n| !n.is_empty() && !is_season_label(n)).map(str::to_owned);
-    mem(|m| {
+    mem_mut(|m| {
         if let Some(n) = &named {
             m.show_name.insert(show_id.to_owned(), n.clone());
         }
