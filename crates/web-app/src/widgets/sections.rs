@@ -111,8 +111,9 @@ pub fn toggle(ui: &Ui, label: &str, on: Signal<bool>, enabled: bool, on_flip: im
 pub fn select(ui: &Ui, label: &str, options: Vec<String>, chosen: Signal<usize>) -> El {
     // The chosen option at the start, the arrow at the end, as a `select` draws them.
     let s = w::select(ui, label.to_owned(), options, chosen).variant("p_select");
-    if let Some(value) = ui.tree().children(s.id()).first() {
-        let _ = ui.element(*value).layout(|l| l.grow = 1.0);
+    let tree = ui.tree();
+    if let Some(value) = tree.children(s.id()).into_iter().find(|c| tree.path(*c).ends_with("select_value")) {
+        let _ = ui.element(value).layout(|l| l.grow = 1.0);
     }
     s
 }
