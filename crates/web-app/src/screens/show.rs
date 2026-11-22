@@ -112,10 +112,16 @@ pub fn folder_view(ui: &Ui, ctx: &Ctx, page: &BrowsePage, heading: &str, source:
     let (r2, u, c, p, h) = (root.clone(), ui.clone(), ctx.clone(), page.clone(), heading.to_owned());
     let search = Rc::new(search);
     let first = Rc::new(std::cell::Cell::new(true));
+    let last = Rc::new(std::cell::Cell::new(None::<(u32, bool, bool)>));
     let root = root.bind(move || {
-        version.get();
+        let v = version.get();
         let phone = c.width.get() <= 720.0;
         let remote = c.is_remote();
+        // Only a change repaints: a rebuild empties the page for a moment, which would lose
+        // the scroll position (the old page's innerHTML swap keeps it).
+        if last.replace(Some((v, phone, remote))) == Some((v, phone, remote)) {
+            return;
+        }
         untrack(|| {
             r2.clear();
             let view = show_view(&p, show.clone());
@@ -363,25 +369,14 @@ fn after_paint(ui: &Ui, ctx: &Ctx, page: &BrowsePage, view: &ShowView, version: 
         p.push((page.path.clone(), page.items.clone()));
     });
     let rows = ROWS.with(|r| std::mem::take(&mut *r.borrow_mut()));
-    let landing = LANDING.with(|l| l.borrow().clone()).filter(|l| l.0 == page.path);
+    let raw = LANDING.with(|l| l.borrow().clone());
+    let landing = raw.filter(|l| l.0 == page.path);
     if let Some((path, s, e)) = landing {
         if let Some((_, row)) = rows.iter().find(|(k, _)| *k == (path.clone(), s, e)) {
             LANDING.with(|l| *l.borrow_mut() = None);
             // `scrollIntoView({ block: "center" })`: a window-tall box around the row's middle,
             // once the row is laid out.
-            let (r2, u2) = (row.clone(), ui.clone());
-            let done = Rc::new(std::cell::Cell::new(false));
-            let _ = row.clone().on_resize(move |size| {
-                if done.replace(true) {
-                    return;
-                }
-                let (r3, h) = (r2.clone(), u2.window_size().height);
-                u2.after(std::time::Duration::ZERO, move || {
-                    let mid = size.height / 2.0;
-                    let top = remedy_ui::core::Point::new(0.0, mid - h / 2.0);
-                    r3.scroll_rect_into_view(remedy_ui::core::Rect::from_origin_size(top, remedy_ui::core::Size::new(size.width, h)));
-                });
-            });
+            center_when_laid_out(ui.clone(), row.clone(), 40);
         }
     }
     if !check_library {
@@ -405,6 +400,21 @@ fn after_paint(ui: &Ui, ctx: &Ctx, page: &BrowsePage, view: &ShowView, version: 
         }
         if before != fresh {
             version.update(|n| *n += 1);
+        }
+    });
+}
+
+fn center_when_laid_out(ui: Ui, row: El, tries: u32) {
+    let u2 = ui.clone();
+    ui.after(std::time::Duration::from_millis(50), move || {
+        match row.bounds().filter(|b| b.size().height > 0.0) {
+            Some(b) => {
+                let (size, h) = (b.size(), u2.window_size().height);
+                let top = remedy_ui::core::Point::new(0.0, size.height / 2.0 - h / 2.0);
+                row.scroll_rect_into_view(remedy_ui::core::Rect::from_origin_size(top, remedy_ui::core::Size::new(size.width, h)));
+            }
+            None if tries > 0 => center_when_laid_out(u2, row, tries - 1),
+            None => {}
         }
     });
 }
