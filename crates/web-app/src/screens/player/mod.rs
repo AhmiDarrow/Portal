@@ -499,12 +499,19 @@ impl Dock {
             let _ = len;
             w2(&|d| untrack(|| d.near_end(secs(at))));
         });
+        // Choices made on another screen or device show here (prefs.ts on mount and when
+        // the page is seen again).
+        prefs::sync(&self.0.ctx, || {});
         // The page hidden or closed: save the place now (the ticker may not run again).
         let w2 = with.clone();
         let _ = self.0.ui.root().on_visibility(move |seen| {
-            if !seen {
-                w2(&|d| d.post_progress(true, true, None));
-            }
+            w2(&|d| {
+                if seen {
+                    prefs::sync(&d.0.ctx, || {});
+                } else {
+                    d.post_progress(true, true, None);
+                }
+            });
         });
     }
 
