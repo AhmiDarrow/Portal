@@ -1,11 +1,6 @@
-//! The page's own localStorage items the old UI wrote (`portal-theme`, `portal-fonts`).
-//! `/` and `/next/` are one origin, so both pages read the same choice.
-//!
-//! ENGINE GAP: RemedyUI reads these (`webstorage::browser_local_storage`) but has no way to
-//! write a raw item: `Signal::persist` keeps its own versioned JSON under
-//! `remedy:<app>:<key>` (remedy-ui-reactive/src/persist.rs, `Persist`), and
-//! remedy-ui-services-webstorage is read-only (src/browser.rs). Until it can, choices made
-//! in this page apply until it reloads.
+//! Reads one of the old page's own localStorage items (`portal-playback`, prefs.rs).
+//! `/` and `/next/` are one origin, so both pages read the same item. Theme and fonts are
+//! kept with `Signal::persist` and `Persist::plain` instead (shell.rs), which also writes.
 
 /// The item `key`, in a browser page; natively there is none.
 pub fn item(key: &str) -> Option<String> {

@@ -15,7 +15,7 @@ use remedy_ui::input::{Key, PointerPhase};
 use remedy_ui::layout::{Align, Length, Position, AUTO};
 use remedy_ui::motion::{Motion, Target};
 use remedy_ui::paint::Brush;
-use remedy_ui::reactive::{Cancel, Signal};
+use remedy_ui::reactive::{Cancel, Persist, Plain, Signal};
 use remedy_ui::router::Router;
 use remedy_ui::style::{StickyInsets, States, StylePatch, StyleSheet, TextTransform};
 use remedy_ui::view::Style;
@@ -50,10 +50,9 @@ pub fn app(app: &App) {
             app: a.clone(),
             api: api::Api::new(&a),
             router: Router::for_window(window, "/"),
-            // ENGINE GAP: read from the old page's keys, but a change here is not saved yet:
-            // the engine cannot write a page's own localStorage item (see stored.rs).
-            theme: Signal::new(theme::saved().to_owned()),
-            fonts: Signal::new(Fonts::saved()),
+            // The old page's own items, as it writes them, so `/` and `/next/` share the choice.
+            theme: Signal::new(theme::DEFAULT.to_owned()).persist(Persist::new(theme::KEY).plain(Plain::Text)),
+            fonts: Signal::new(Fonts::default()).persist(Persist::new(crate::fonts::KEY).plain(Plain::Json)),
             me: Signal::new(None),
             activity: Activity::new(ui),
             width: Signal::new(ui.window_size().width),
@@ -65,6 +64,10 @@ pub fn app(app: &App) {
             progress: Signal::new((String::new(), 0)),
         };
         ctx.router.set_title(|r| Page::from_route(r).title());
+        // A saved "System default" needs the browser's face again on every load.
+        if ctx.fonts.get_untracked().is_ok_and(|f| f.uses_system()) {
+            crate::fonts::load_system(&a);
+        }
         ask_pairing(&ctx, 0);
         let (width, height) = (ctx.width, ctx.height);
         let root = ui.root().child(page(ui, &ctx)).on_resize(move |s| {
@@ -640,6 +643,11 @@ fn refresh_update(ctx: &Ctx, fetched: Rc<Cell<Option<f64>>>, watching: Rc<Cell<b
         }
         c.update.set(Some(info));
     });
+}
+
+/// Follows a download or install Settings started, reloading once the new version answers.
+pub fn follow_update(ctx: &Ctx, from: String) {
+    watch_update(ctx, from, now_secs(&ctx.activity_ui()));
 }
 
 fn watch_update(ctx: &Ctx, from: String, started: f64) {
