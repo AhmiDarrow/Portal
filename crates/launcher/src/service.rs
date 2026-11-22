@@ -607,9 +607,23 @@ fn wait_for_exit(pid: u32, limit: Duration) -> bool {
     }
 }
 
+/// Linux: polls `/proc/<pid>`; a zombie waiting to be reaped has exited.
 #[cfg(not(windows))]
-fn wait_for_exit(_pid: u32, _limit: Duration) -> bool {
-    true
+fn wait_for_exit(pid: u32, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    loop {
+        let gone = fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |stat| {
+            stat.rsplit_once(')')
+                .is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+        });
+        if gone {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 pub fn restart(port: u16) -> Result<(), String> {
@@ -716,11 +730,24 @@ fn install_dir() -> Result<PathBuf, String> {
 }
 
 /// `%LOCALAPPDATA%\Portal`, where the service keeps its data.
+#[cfg(windows)]
 pub fn data_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("Portal")
+}
+
+/// `$XDG_DATA_HOME/portal`, else `~/.local/share/portal`: where the service
+/// keeps its data on Linux (the service's `paths::portal_dir`).
+#[cfg(not(windows))]
+pub fn data_dir() -> PathBuf {
+    let set = |key: &str| std::env::var_os(key).filter(|value| !value.is_empty()).map(PathBuf::from);
+    set("XDG_DATA_HOME")
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| Some(set("HOME")?.join(".local").join("share")))
+        .unwrap_or_else(std::env::temp_dir)
+        .join("portal")
 }
 
 pub fn log_dir() -> PathBuf {

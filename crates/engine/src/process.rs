@@ -19,6 +19,11 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout, Instant};
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+use linux::*;
+
 const PORT_WAIT: Duration = Duration::from_secs(30);
 /// Kodi saves its settings and add-on data while it quits; add-on services
 /// can make that slow. Only after this long is it ended by force.
@@ -29,9 +34,13 @@ const STATUS_RPC: Duration = Duration::from_millis(900);
 const IMAGE_CACHE_CAP: usize = 64;
 const IMAGE_CACHE_BYTES: usize = 32 * 1024 * 1024;
 
+#[cfg(windows)]
 const DETACHED_PROCESS: u32 = 0x00000008;
+#[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(windows)]
 const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x01000000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -869,8 +878,10 @@ fn extra_started(pid: u32, running: Option<&[u32]>) -> bool {
 
 /// One start at a time, across every Portal process. The lock is held only
 /// around the check and `CreateProcess`, not while waiting for the port.
+#[cfg(windows)]
 struct KodiStartLock(windows_sys::Win32::Foundation::HANDLE);
 
+#[cfg(windows)]
 impl KodiStartLock {
     fn acquire() -> Result<Self, EngineError> {
         use std::os::windows::ffi::OsStrExt;
@@ -897,6 +908,7 @@ impl KodiStartLock {
     }
 }
 
+#[cfg(windows)]
 impl Drop for KodiStartLock {
     fn drop(&mut self) {
         use windows_sys::Win32::Foundation::CloseHandle;
@@ -1068,6 +1080,7 @@ fn xml_escape(text: &str) -> String {
 /// attached again on the next launch. A parent job may forbid breakaway; then
 /// Kodi starts inside the job instead. The second attempt runs only when the
 /// first did not create a process and the machine still shows no Kodi.
+#[cfg(windows)]
 fn spawn_kodi(exe: &Path) -> Result<u32, EngineError> {
     let base = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW;
     match spawn_hidden(exe, base | CREATE_BREAKAWAY_FROM_JOB) {
@@ -1084,6 +1097,7 @@ fn spawn_kodi(exe: &Path) -> Result<u32, EngineError> {
 /// start-up "hidden" to the program's first show, so Kodi's window never
 /// appears while it starts, rather than showing until Portal can hide it.
 /// No handles are passed on, so Kodi has no console input or output.
+#[cfg(windows)]
 fn spawn_hidden(exe: &Path, flags: u32) -> Option<u32> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::CloseHandle;
@@ -1360,6 +1374,7 @@ fn end_reveal() -> Option<Vec<PlacedWindow>> {
 /// A place just past an edge of the monitor the window was on, clear of every
 /// screen. Kodi still finds that monitor nearest, so it keeps its screen
 /// setting. None when every side runs into another screen.
+#[cfg(windows)]
 fn offscreen_spot(window: &PlacedWindow, width: i32, height: i32) -> Option<(i32, i32)> {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{
@@ -1399,6 +1414,7 @@ fn offscreen_spot(window: &PlacedWindow, width: i32, height: i32) -> Option<(i32
 
 /// Just past the right edge of every monitor together, for when each side
 /// of Kodi's own monitor has another one beside it.
+#[cfg(windows)]
 fn beyond_desktop() -> (i32, i32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -1416,6 +1432,7 @@ fn beyond_desktop() -> (i32, i32) {
 /// A spot on the monitor work area. The saved place is kept when it already
 /// sits on that area. A window parked off every screen is brought back,
 /// because a dialog there never finishes.
+#[cfg(windows)]
 fn onscreen_place(window: &PlacedWindow) -> (i32, i32, i32, i32) {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::{
@@ -1457,6 +1474,7 @@ fn onscreen_place(window: &PlacedWindow) -> (i32, i32, i32, i32) {
     (x, y, width, height)
 }
 
+#[cfg(windows)]
 fn window_rect(hwnd: isize) -> Option<(i32, i32, i32, i32)> {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect;
@@ -1478,6 +1496,7 @@ fn place_window_inactive(hwnd: isize, x: i32, y: i32, width: i32, height: i32) {
     place_window_with(hwnd, x, y, width, height, true);
 }
 
+#[cfg(windows)]
 fn place_window_with(hwnd: isize, x: i32, y: i32, width: i32, height: i32, inactive: bool) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW,
@@ -1500,6 +1519,7 @@ fn place_window_with(hwnd: isize, x: i32, y: i32, width: i32, height: i32, inact
 }
 
 /// Moves and sizes a window without showing or activating it.
+#[cfg(windows)]
 fn place_hidden(hwnd: isize, x: i32, y: i32, width: i32, height: i32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
@@ -1517,6 +1537,7 @@ fn place_hidden(hwnd: isize, x: i32, y: i32, width: i32, height: i32) {
     }
 }
 
+#[cfg(windows)]
 fn show_inactive(hwnd: isize) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNA};
     unsafe {
@@ -1581,11 +1602,6 @@ fn process_started(pid: u32) -> Option<u64> {
         CloseHandle(handle);
         (ok != 0).then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
     }
-}
-
-#[cfg(not(windows))]
-fn process_started(_pid: u32) -> Option<u64> {
-    None
 }
 
 /// The Windows session a process runs in. None when it cannot be read.
@@ -1899,7 +1915,7 @@ fn scan_kodi() -> Option<Vec<u32>> {
     None
 }
 
-#[cfg(not(test))]
+#[cfg(all(windows, not(test)))]
 fn scan_kodi() -> Option<Vec<u32>> {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -1934,7 +1950,7 @@ fn scan_kodi() -> Option<Vec<u32>> {
     }
 }
 
-#[cfg(not(test))]
+#[cfg(all(windows, not(test)))]
 fn exe_is_kodi(name: &[u16]) -> bool {
     let end = name
         .iter()
@@ -1943,8 +1959,11 @@ fn exe_is_kodi(name: &[u16]) -> bool {
     String::from_utf16_lossy(&name[..end]).eq_ignore_ascii_case("kodi.exe")
 }
 
+#[cfg(windows)]
 static WINDOW_GATE: Mutex<()> = Mutex::new(());
+#[cfg(windows)]
 static WINDOW_FOUND: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+#[cfg(windows)]
 static WINDOW_PID: AtomicU32 = AtomicU32::new(0);
 /// Overlapping reveals share one show. Only the last drop hides Kodi.
 static REVEAL_DEPTH: AtomicU32 = AtomicU32::new(0);
@@ -1964,6 +1983,7 @@ const START_GUARD_EVERY: Duration = Duration::from_millis(10);
 /// to this thread as it happens, and the window is hidden at once, before
 /// the screen is next drawn; a look every few milliseconds backs that up.
 /// A reveal for a dialog, or the viewer showing Kodi, is left alone.
+#[cfg(windows)]
 fn guard_start(pid: u32) {
     START_GUARD.store(pid, Ordering::SeqCst);
     std::thread::spawn(move || {
@@ -2011,6 +2031,7 @@ fn guard_start(pid: u32) {
 
 /// A window of the starting Kodi was shown: hide it again, unless a reveal
 /// has it on screen on purpose or the guard has ended.
+#[cfg(windows)]
 unsafe extern "system" fn on_start_show(
     _hook: windows_sys::Win32::UI::Accessibility::HWINEVENTHOOK,
     _event: u32,
@@ -2040,6 +2061,7 @@ unsafe extern "system" fn on_start_show(
 }
 
 /// Hides those of a process's windows that are on screen.
+#[cfg(windows)]
 fn hide_shown(pid: u32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
     for hwnd in windows_of(pid) {
@@ -2054,6 +2076,7 @@ fn end_start_guard() {
     START_GUARD.store(0, Ordering::SeqCst);
 }
 
+#[cfg(windows)]
 fn windows_of(pid: u32) -> Vec<isize> {
     use windows_sys::Win32::UI::WindowsAndMessaging::EnumWindows;
     let _gate = WINDOW_GATE.lock().unwrap_or_else(|err| err.into_inner());
@@ -2071,6 +2094,7 @@ fn windows_of(pid: u32) -> Vec<isize> {
         .clone()
 }
 
+#[cfg(windows)]
 unsafe extern "system" fn on_window(
     hwnd: windows_sys::Win32::Foundation::HWND,
     _: windows_sys::Win32::Foundation::LPARAM,
@@ -2087,6 +2111,7 @@ unsafe extern "system" fn on_window(
     TRUE
 }
 
+#[cfg(windows)]
 fn window_visible(pid: u32) -> bool {
     use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
     windows_of(pid)
@@ -2094,6 +2119,7 @@ fn window_visible(pid: u32) -> bool {
         .any(|hwnd| unsafe { IsWindowVisible(hwnd as usize as _) != 0 })
 }
 
+#[cfg(windows)]
 fn show_hwnd(hwnd: isize, visible: bool) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
     let flag = if visible { SW_SHOW } else { SW_HIDE };
@@ -2102,6 +2128,7 @@ fn show_hwnd(hwnd: isize, visible: bool) {
     }
 }
 
+#[cfg(windows)]
 fn terminate_owned(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
@@ -2126,6 +2153,7 @@ fn terminate_owned(pid: u32) {
 /// Ends a process this start created after the snapshot showed another Kodi.
 /// Unlike `terminate_owned`, it still runs when more than one `kodi.exe` exists,
 /// because the extra one is the process just created.
+#[cfg(windows)]
 fn stop_pid(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
