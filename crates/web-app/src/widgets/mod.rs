@@ -7,6 +7,7 @@ pub mod activity;
 pub mod art;
 pub mod browse_card;
 pub mod card;
+pub mod confirm;
 pub mod controls;
 pub mod episode_row;
 pub mod glyphs;
@@ -15,6 +16,7 @@ pub mod page;
 pub mod play;
 pub mod saved;
 pub mod season_tabs;
+pub mod sections;
 pub mod shelf;
 pub mod shows;
 pub mod titles;
@@ -43,5 +45,10 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     crate::screens::show::rules(s, k);
     crate::screens::title::rules(s, k);
     crate::screens::prompts::rules(s, k);
+    sections::rules(s, k);
+    crate::screens::source::rules(s, k);
+    crate::screens::addon_settings::rules(s, k);
     crate::screens::player::rules(s, k);
+    crate::screens::settings::rules(s, k);
+    crate::screens::pairing::rules(s, k);
 }

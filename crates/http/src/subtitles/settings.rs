@@ -112,10 +112,19 @@ pub fn save(path: &Path, stored: &Stored) -> std::io::Result<()> {
     crate::paths::write_settings(path, &body)
 }
 
-const PROTECTED: &str = "dpapi:";
+/// The prefix of a sealed value: DPAPI on Windows, `sealed.rs` on Linux.
+#[cfg(windows)]
+pub(crate) const PROTECTED: &str = "dpapi:";
+#[cfg(not(windows))]
+pub(crate) const PROTECTED: &str = "sealed:";
 
-/// `dpapi:<hex>`: the secret encrypted for this Windows account. The
-/// metadata settings keep the TMDB key this way too.
+#[cfg(not(windows))]
+#[path = "sealed.rs"]
+mod dpapi;
+
+/// `dpapi:<hex>`: the secret encrypted for this Windows account (on Linux,
+/// `sealed:<hex>`, see `sealed.rs`). The metadata settings keep the TMDB key
+/// this way too.
 pub(crate) fn protect(secret: &str) -> Option<String> {
     let sealed = dpapi::seal(secret.as_bytes())?;
     let mut out = String::from(PROTECTED);
@@ -206,17 +215,6 @@ mod dpapi {
                 output,
             )
         })
-    }
-}
-
-#[cfg(not(windows))]
-mod dpapi {
-    pub fn seal(_data: &[u8]) -> Option<Vec<u8>> {
-        None
-    }
-
-    pub fn open(_data: &[u8]) -> Option<Vec<u8>> {
-        None
     }
 }
 
