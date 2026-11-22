@@ -58,14 +58,20 @@ pub fn app(app: &App) {
             activity: Activity::new(ui),
             width: Signal::new(ui.window_size().width),
             update: Signal::new(None),
+            window: window.clone(),
+            height: Signal::new(ui.window_size().height),
+            head_h: Signal::new(0.0),
+            dock: Signal::new(crate::DockView::default()),
+            progress: Signal::new((String::new(), 0)),
         };
         ctx.router.set_title(|r| Page::from_route(r).title());
         ask_pairing(&ctx, 0);
-        let width = ctx.width;
+        let (width, height) = (ctx.width, ctx.height);
         let root = ui.root().child(page(ui, &ctx)).on_resize(move |s| {
             if width.get_untracked().ok() != Some(s.width) {
                 width.set(s.width);
             }
+            height.set_if_changed(s.height);
         });
         let (app, t, f) = (a.clone(), ctx.theme, ctx.fonts);
         let _ = root.bind(move || {
@@ -166,14 +172,23 @@ fn routed(ui: &Ui, ctx: &Ctx) -> El {
             l.margin = Insets { top: 14.4, bottom: 0.0, start: side, end: side };
         });
     });
+    // body { padding-bottom: 2rem }; while the player is open, as much as it covers and
+    // 12 px more (player.ts `fitPlayingPadding`).
+    let dock = ctx.dock;
+    let foot = w::column(ui).height(32.0).layout(|l| l.shrink = 0.0);
+    let f2 = foot.clone();
+    let foot = foot.bind(move || {
+        let v = dock.get();
+        let h = if v.open && !v.theater { (v.cover + 12.0).ceil() } else { 32.0 };
+        let _ = f2.clone().height(h);
+    });
     let scroll = w::scroll(ui)
         .fill_width()
         .child(skip_link(ui, &main))
         .child(header(ui, ctx, chip))
         .child(note)
         .child(main)
-        // body { padding-bottom: 2rem }
-        .child(w::column(ui).height(32.0).layout(|l| l.shrink = 0.0));
+        .child(foot);
     w::column(ui)
         .grow(1.0)
         .fill_width()
@@ -260,13 +275,24 @@ fn header(ui: &Ui, ctx: &Ctx, chip: Signal<Chip>) -> El {
         let _ = wide_nav.clone().hidden(narrow);
         let _ = narrow_nav.clone().hidden(!narrow);
     });
-    ui.el("p_header")
+    let (head_h, dock, wd) = (ctx.head_h, ctx.dock, ctx.width);
+    let hdr = ui
+        .el("p_header")
         .column()
         .fill_width()
         .sticky(StickyInsets::top(0.0))
         .semantics(Semantics::new(Role::Banner))
         .child(top)
         .child(ui.el("p_header_rule").fill_width().height(1.0).layout(|l| l.shrink = 0.0))
+        .on_resize(move |s| head_h.set_if_changed(s.height.ceil()));
+    // The player covers most of a phone screen: the header scrolls away instead of covering
+    // it, except over theater and the mini player.
+    let h2 = hdr.clone();
+    hdr.bind(move || {
+        let v = dock.get();
+        let still = v.open && !v.theater && !v.mini && is_narrow(wd.get());
+        let _ = h2.clone().sticky(if still { StickyInsets::default() } else { StickyInsets::top(0.0) });
+    })
 }
 
 /// The nav, the page shown marked current; no Source on a remote device.

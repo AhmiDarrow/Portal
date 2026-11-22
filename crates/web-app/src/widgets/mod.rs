@@ -40,4 +40,6 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     browse_card::rules(s, k);
     crate::screens::show::rules(s, k);
     crate::screens::title::rules(s, k);
+    crate::screens::prompts::rules(s, k);
+    crate::screens::player::rules(s, k);
 }
