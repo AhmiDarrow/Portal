@@ -21,7 +21,7 @@ use remedy_ui::core::time::{Instant, SystemTime, UNIX_EPOCH};
 use remedy_ui::core::Insets;
 use remedy_ui::input::{Key, PointerPhase};
 use remedy_ui::layout::{Length, Position, AUTO};
-use remedy_ui::playback::{PlaybackState, Remote, RemoteControl, RemoteStatus};
+use remedy_ui::playback::{PlaybackState, Remote, RemoteControl, RemoteStatus, Timeline};
 use remedy_ui::reactive::{untrack, Signal};
 use remedy_ui::style::{States, StylePatch, StyleSheet};
 use remedy_ui::widgets as w;
@@ -478,12 +478,19 @@ fn stop_casting(d: &Dock) {
     close_menu(d, false);
     let Some(dev) = d.0.cast.current() else { return };
     d.0.cast.busy.set(true);
+    // A look answered meanwhile would see the cast gone and say "Casting ended.".
+    d.0.cast.st.borrow_mut().generation += 1;
     d.run(api::cast_device_stop(&dev.id), move |d, out| {
         d.0.cast.busy.set(false);
+        if !d.0.cast.current().is_some_and(|c| c.id == dev.id) {
+            return;
+        }
         match out {
-            Ok(_) if d.0.cast.current().is_some_and(|c| c.id == dev.id) => ended(d, "Stopped casting.".into()),
-            Ok(_) => {}
-            Err(e) => d.set_status(&cast_fail(&e)),
+            Ok(_) => ended(d, "Stopped casting.".into()),
+            Err(e) => {
+                d.set_status(&cast_fail(&e));
+                follow(d);
+            }
         }
     });
 }
@@ -604,6 +611,11 @@ fn apply(d: &Dock, view: &CastDeviceView) {
         st.line = line.clone();
     }
     drop(st);
+    if let Some(l) = length {
+        // The seek bar spans what the TV plays: a timeline left from the item that played
+        // here (or the episode before) would keep its length.
+        p.set_timeline(Some(Timeline::new(Duration::ZERO).length(dur(l))));
+    }
     p.set_remote_status(status);
     // Written when it changes, so an error stays until there is news.
     if changed {
