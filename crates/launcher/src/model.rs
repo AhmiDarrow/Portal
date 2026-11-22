@@ -242,6 +242,12 @@ impl Model {
         }
     }
 
+    /// Restarts the budget has spent in its window (tests watch the watchdog with it).
+    #[cfg(test)]
+    pub fn restarts_spent(&self) -> usize {
+        self.budget.used.len()
+    }
+
     fn idle(&self) -> bool {
         self.job.is_none() && self.updating_since.is_none()
     }

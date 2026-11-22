@@ -238,6 +238,17 @@ fn a_second_launch_with_stop_quits_the_tray() {
     assert_eq!(r.code.get(), 0);
 }
 
+/// The notifications saying the watchdog gave up (a first run also says where Portal went).
+fn gave_up(r: &mut Running) -> Vec<Notification> {
+    r.app
+        .host()
+        .notifications()
+        .iter()
+        .filter(|n| n.title == "Portal's server keeps stopping")
+        .cloned()
+        .collect()
+}
+
 #[test]
 fn the_watchdog_restarts_a_vanished_server_three_times_then_says_so() {
     let fake = FakePortal::start();
@@ -245,23 +256,22 @@ fn the_watchdog_restarts_a_vanished_server_three_times_then_says_so() {
     fake.go_away();
     // Each check finds nothing and starts it again; here no portal.exe is beside the test,
     // so every start fails, as a server that keeps dying would.
-    let pending = |r: &mut Running| r.tray.borrow().as_ref().unwrap().0.health_pending.get();
-    let mut restarts = 0;
+    // Each check finds nothing and starts it again (the budget counts each start), until
+    // the watchdog gives up and says so.
     for _ in 0..12 {
         r.tick();
-        r.until("the check is read", |r| !pending(r));
-        if r.model(|m| m.job == Some(Job::Starting)) {
-            restarts += 1;
-            r.until("the restart finishes", |r| r.model(|m| m.job.is_none()));
-        }
-        if !r.app.host().notifications().is_empty() {
+        r.until("the check and any restart are done", |r| {
+            r.model(|m| m.job.is_none())
+                && !r.tray.borrow().as_ref().unwrap().0.health_pending.get()
+        });
+        if gave_up(&mut r).len() == 1 {
             break;
         }
     }
+    let restarts = r.model(|m| m.restarts_spent());
     assert_eq!(restarts, 3, "at most 3 restarts in 10 minutes");
-    let notes = r.app.host().notifications();
+    let notes = gave_up(&mut r);
     assert_eq!(notes.len(), 1, "told once: {notes:?}");
-    assert_eq!(notes[0].title, "Portal's server keeps stopping");
     assert_eq!(notes[0].urgency, Urgency::Warning);
     // Given up: later checks do not start it again, and the menu offers to.
     r.tick();
