@@ -28,7 +28,7 @@ fn settings_round_trip_with_secrets_encrypted() {
     assert!(!text.contains("pass word!"));
     assert!(!text.contains("subdl-key-0123456789"));
     assert!(!text.contains("subsource-key-0123456789"));
-    assert!(text.contains("dpapi:"));
+    assert!(text.contains(crate::subtitles::PROTECTED));
     assert_eq!(load(&path), stored);
 
     save(&path, &Stored::default()).unwrap();
@@ -41,7 +41,8 @@ fn settings_round_trip_with_secrets_encrypted() {
     // Hand-typed values are read as they are; broken sealed ones are dropped.
     std::fs::write(
             &path,
-            r#"{"languages":["EN-us","xx"],"opensubtitles_key":" typed ","opensubtitles_password":"dpapi:00ff","subdl_key":"dpapi:zz"}"#,
+            r#"{"languages":["EN-us","xx"],"opensubtitles_key":" typed ","opensubtitles_password":"dpapi:00ff","subdl_key":"dpapi:zz"}"#
+                .replace("dpapi:", PROTECTED),
         )
         .unwrap();
     let loaded = load(&path);

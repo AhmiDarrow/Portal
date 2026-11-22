@@ -10,7 +10,6 @@ use std::collections::{HashMap, VecDeque};
 use std::future::IntoFuture;
 use std::io::SeekFrom;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -286,13 +285,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(portal_dir.join("hls"))?;
 
     let kodi_exe = paths::kodi_exe();
-    let profile = std::env::var_os("APPDATA")
-        .map(|dir| PathBuf::from(dir).join("Kodi"))
-        .unwrap_or_else(|| PathBuf::from(r"C:\Users\Default\AppData\Roaming\Kodi"));
-    let programs_addons = kodi_exe
-        .parent()
-        .map(|dir| dir.join("addons"))
-        .unwrap_or_else(|| PathBuf::from(r"C:\Program Files\Kodi\addons"));
+    let profile = paths::kodi_profile();
+    let programs_addons = paths::kodi_system_addons(&kodi_exe);
 
     let supervisor = Supervisor::start(ProcessConfig {
         host: "127.0.0.1".to_string(),

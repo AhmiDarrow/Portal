@@ -21,7 +21,7 @@ fn settings_round_trip_with_the_key_encrypted() {
     save(&path, &stored).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(!text.contains("0123456789abcdef"));
-    assert!(text.contains("dpapi:"));
+    assert!(text.contains(crate::subtitles::PROTECTED));
     assert_eq!(load(&path), stored);
 
     save(&path, &Stored::default()).unwrap();
@@ -45,7 +45,7 @@ fn a_plain_key_is_read_as_typed_and_a_broken_sealed_one_is_dropped() {
     assert_eq!(stored.tmdb_key.as_deref(), Some("typed-key"));
     assert!(plain);
 
-    std::fs::write(&path, r#"{"tmdb_key": "dpapi:zz"}"#).unwrap();
+    std::fs::write(&path, format!(r#"{{"tmdb_key": "{}zz"}}"#, crate::subtitles::PROTECTED)).unwrap();
     let (stored, plain) = read(&path);
     assert_eq!(stored, Stored::default());
     assert!(!plain);
@@ -69,7 +69,7 @@ fn a_plain_key_from_an_earlier_version_is_encrypted_on_load() {
     );
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(!text.contains("0123456789abcdef"));
-    assert!(text.contains("dpapi:"));
+    assert!(text.contains(crate::subtitles::PROTECTED));
     assert_eq!(load(&path), stored);
     let _ = std::fs::remove_file(&path);
 }

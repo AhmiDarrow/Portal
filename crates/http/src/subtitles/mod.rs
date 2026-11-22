@@ -44,6 +44,8 @@ use crate::metadata::{net, Metadata};
 use crate::{fail, ApiError, AppState};
 use rank::{Found, Source};
 pub(crate) use settings::{is_protected, protect, reveal};
+#[cfg(test)]
+pub(crate) use settings::PROTECTED;
 
 /// One source's whole search, a show or movie lookup included.
 const SOURCE_LIMIT: Duration = Duration::from_secs(8);

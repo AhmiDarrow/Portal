@@ -177,9 +177,7 @@ impl Addons {
         staging: impl Into<PathBuf>,
     ) -> Self {
         let programs = programs.into();
-        let release = programs
-            .parent()
-            .and_then(|dir| file_version(&dir.join("kodi.exe")));
+        let release = kodi_release_at(&programs);
         let client = reqwest::Client::builder()
             .redirect(redirect_policy())
             // No limit on the whole download, which would cut off a large
@@ -435,8 +433,7 @@ impl Addons {
     /// `21.3` from `kodi.exe` beside the programs add-on folder. None when
     /// that file is not there, so a test profile does not filter directories.
     fn kodi_release(&self) -> Option<String> {
-        let exe = self.programs.parent()?.join("kodi.exe");
-        file_version(&exe)
+        kodi_release_at(&self.programs)
     }
 
     async fn fetch_index(&self, feed: &RepoFeed) -> Result<String, EngineError> {
@@ -1480,6 +1477,22 @@ fn merge_packages(into: &mut Vec<Package>, extra: Vec<Package>) {
     }
 }
 
+/// Kodi's release, from `kodi.exe` beside the programs add-on folder.
+#[cfg(windows)]
+fn kodi_release_at(programs: &Path) -> Option<String> {
+    file_version(&programs.parent()?.join("kodi.exe"))
+}
+
+/// Kodi's release on Linux, from its `xbmc.addon` add-on, which carries
+/// Kodi's own version (`21.2.0`) in the programs add-on folder.
+#[cfg(target_os = "linux")]
+fn kodi_release_at(programs: &Path) -> Option<String> {
+    let xml = read_capped(&programs.join("xbmc.addon").join("addon.xml"), XML_CAP)?;
+    let meta = parse_addon_xml(&xml).ok()?;
+    (meta.id == "xbmc.addon" && valid_version(&meta.version)).then_some(meta.version)
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
 fn file_version(path: &Path) -> Option<String> {
     static CACHE: OnceLock<Mutex<Vec<(PathBuf, String)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(Vec::new()));
