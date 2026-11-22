@@ -4,7 +4,7 @@
 //! `remedy_ui_themes::portal_theme`, token for token from themes.ts.
 
 use remedy_ui::core::Color;
-use remedy_ui::style::{Gradient, Shadow, States, StylePatch, StyleSheet, Theme};
+use remedy_ui::style::{Gradient, LineHeight, Shadow, States, StylePatch, StyleSheet, Theme};
 use remedy_ui::themes::{portal_page_layers, portal_sheet, portal_theme};
 
 /// The old page's localStorage key, shared with it (`/` and `/next/` are one origin): the
@@ -75,12 +75,20 @@ pub fn sheet(t: &Theme) -> StyleSheet {
         "portal_page",
         None,
         States::NONE,
-        StylePatch::default().background(t.colors.bg).background_layers(portal_page_layers()),
+        StylePatch::default()
+            .background(t.colors.bg)
+            .background_layers(portal_page_layers())
+            .line_height(LineHeight::Relative(1.5)),
     );
     let k = Look::of(t);
     // h1, h2, h3 (styles.css): the heading face at 400, 32 / 24 / 16 px.
-    for (v, px) in [("1", 32.0), ("2", 24.0), ("3", 16.0)] {
-        let p = StylePatch::default().heading(true).weight(400.0).text_size(px).foreground(k.text);
+    for (v, px, lh) in [("1", 32.0, 1.2), ("2", 24.0, 1.25), ("3", 16.0, 1.4)] {
+        let p = StylePatch::default()
+            .heading(true)
+            .weight(400.0)
+            .text_size(px)
+            .foreground(k.text)
+            .line_height(LineHeight::Relative(lh));
         s.rule("heading", Some(v), States::NONE, p);
     }
     s.rule("label", Some("muted"), States::NONE, StylePatch::default().foreground(k.muted));

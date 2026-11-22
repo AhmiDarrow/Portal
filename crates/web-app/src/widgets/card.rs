@@ -316,7 +316,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     // The card clips, so the focus ring goes inside it.
     s.rule("p_card_play", None, States::NONE, StylePatch::default().outline_offset(-2.0));
     let side = |x: f32| Insets { top: 0.0, bottom: 0.0, start: x, end: x };
-    s.rule("p_card_name", None, States::NONE, StylePatch::default().text_size(16.8).padding(side(11.2)));
+    s.rule("p_card_name", None, States::NONE, StylePatch::default().text_size(16.8).line_height(remedy_ui::style::LineHeight::Relative(1.25)).padding(side(11.2)));
     s.rule(
         "p_card_kind",
         None,

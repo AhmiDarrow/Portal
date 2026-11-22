@@ -117,7 +117,8 @@ fn page(ui: &Ui, ctx: &Ctx) -> El {
 }
 
 fn routed(ui: &Ui, ctx: &Ctx) -> El {
-    start_polls(ui, ctx);
+    let chip: Signal<Chip> = Signal::new(("", "…".to_owned(), String::new()));
+    start_polls(ui, ctx, chip);
     let (u, c) = (ui.clone(), ctx.clone());
     let content = ctx.router.view(ui, move |route| {
         // main.ts `render`: a new page hides the last one's activity and notice.
@@ -144,7 +145,7 @@ fn routed(ui: &Ui, ctx: &Ctx) -> El {
     let m2 = main.clone();
     let main = main.bind(move || {
         let pad = if n2() { Insets::all(12.8) } else { Insets { top: 22.4, bottom: 38.4, start: 21.6, end: 21.6 } };
-        let _ = m2.clone().layout(move |l| l.padding = pad);
+        let _ = m2.clone().padding(pad);
     });
     let n3 = narrow.clone();
     let note = activity::notice(ui, &ctx.activity).layout(|l| {
@@ -162,7 +163,7 @@ fn routed(ui: &Ui, ctx: &Ctx) -> El {
     let scroll = w::scroll(ui)
         .fill_width()
         .child(skip_link(ui, &main))
-        .child(header(ui, ctx))
+        .child(header(ui, ctx, chip))
         .child(note)
         .child(main)
         // body { padding-bottom: 2rem }
@@ -194,7 +195,7 @@ fn skip_link(ui: &Ui, main: &El) -> El {
 }
 
 /// The header (`header.top`): sticky at the top, frosted, with its hairline under it.
-fn header(ui: &Ui, ctx: &Ctx) -> El {
+fn header(ui: &Ui, ctx: &Ctx, chip: Signal<Chip>) -> El {
     let brand = crate::widgets::link(ui, &ctx.router, "/", "Portal", "brand", None);
     let brand = ui
         .el("p_brand")
@@ -211,39 +212,39 @@ fn header(ui: &Ui, ctx: &Ctx) -> El {
         .layout(|l| l.margin = Insets { top: 0.0, bottom: 0.0, start: AUTO, end: 0.0 })
         .child(theme_picker(ui, ctx))
         .child(update_pill(ui, ctx))
-        .child(status_chip(ui, ctx));
-    let nav = nav(ui, ctx);
-    let panel = activity::panel(ui, &ctx.activity).layout(|l| l.margin = Insets { top: 4.0, bottom: 0.0, start: 0.0, end: 0.0 });
-    let top = ui.el("p_top").row().align(Align::Center).fill_width().layout(|l| l.wrap = true);
+        .child(status_chip(ui, chip));
+    // Wide: brand, nav, tools. Under 720 px brand and tools share the first row and the nav
+    // takes the second, scrolling sideways. One nav for each place, the other hidden.
+    let wide_nav = nav(ui, ctx);
+    let narrow_nav = nav(ui, ctx).layout(|l| {
+        l.wrap = false;
+        l.width = Length::Percent(1.0);
+    });
+    let panel = activity::panel(ui, &ctx.activity)
+        .layout(|l| l.margin = Insets { top: 4.0, bottom: 0.0, start: 0.0, end: 0.0 })
+        .layout(|l| l.width = Length::Percent(1.0));
+    let top = ui
+        .el("p_top")
+        .row()
+        .align(Align::Center)
+        .fill_width()
+        .layout(|l| l.wrap = true)
+        .child(brand)
+        .child(wide_nav.clone().layout(|l| l.wrap = true))
+        .child(tools)
+        .child(narrow_nav.clone())
+        .child(panel);
     let (t2, wd) = (top.clone(), ctx.width);
     let top = top.bind(move || {
         let narrow = is_narrow(wd.get());
-        remedy_ui::reactive::untrack(|| {
-            for c in t2.child_elements() {
-                c.remove();
-            }
-            let (gap, pad) = if narrow {
-                ((12.8, 8.0), Insets { top: 11.2, bottom: 11.2, start: 11.2, end: 11.2 })
-            } else {
-                ((17.6, 12.0), Insets { top: 12.0, bottom: 12.0, start: 20.0, end: 20.0 })
-            };
-            let n = nav.clone();
-            let _ = n.clone().layout(move |l| {
-                // Under 720 px the nav takes its own row and scrolls sideways.
-                l.wrap = !narrow;
-                l.width = if narrow { Length::Percent(1.0) } else { Length::Auto };
-            });
-            let row = t2.clone().layout(move |l| {
-                l.gap = gap;
-                l.padding = pad;
-            });
-            let row = if narrow {
-                row.child(brand.clone()).child(tools.clone()).child(n)
-            } else {
-                row.child(brand.clone()).child(n).child(tools.clone())
-            };
-            let _ = row.child(panel.clone().layout(|l| l.width = Length::Percent(1.0)));
-        });
+        let (gap, pad) = if narrow {
+            ((12.8, 8.0), Insets { top: 11.2, bottom: 11.2, start: 11.2, end: 11.2 })
+        } else {
+            ((17.6, 12.0), Insets { top: 12.0, bottom: 12.0, start: 20.0, end: 20.0 })
+        };
+        let _ = t2.clone().layout(move |l| l.gap = gap).padding(pad);
+        let _ = wide_nav.clone().hidden(narrow);
+        let _ = narrow_nav.clone().hidden(!narrow);
     });
     ui.el("p_header")
         .column()
@@ -437,9 +438,9 @@ fn theme_menu(ui: &Ui, button: &El, chosen: Signal<String>, slot: Rc<Cell<Option
 
 /// The Kodi status chip (main.ts `refreshChip`): `running` in gold with a lit dot,
 /// `starting` in the text color, `stopped` or `offline` muted, all in lower case.
-fn status_chip(ui: &Ui, ctx: &Ctx) -> El {
-    let state = chip_state(ctx);
-    let dot = ui.el("p_chip_dot").width(7.2).height(7.2).layout(|l| l.shrink = 0.0).paint(|cx| {
+fn status_chip(ui: &Ui, state: Signal<Chip>) -> El {
+    let u0 = ui.clone();
+    let dot = move || u0.el("p_chip_dot").width(7.2).height(7.2).layout(|l| l.shrink = 0.0).paint(|cx| {
         let c = Point::new(cx.size.width / 2.0, cx.size.height / 2.0);
         let r = cx.size.width / 2.0;
         let gold = cx.style.foreground;
@@ -458,7 +459,7 @@ fn status_chip(ui: &Ui, ctx: &Ctx) -> El {
         .align(Align::Center)
         .gap(6.4)
         .variant(move || state.with(|s| s.0))
-        .child(show(ui, move || state.with(|s| s.0 == "running"), move || dot.clone()).el())
+        .child(show(ui, move || state.with(|s| s.0 == "running"), dot).el())
         .child(u.el("p_chip_text").text(move || state.with(|s| s.1.clone())).nowrap())
         .semantics(move || Semantics::new(Role::Status).label(state.with(|s| s.1.clone())).description(state.with(|s| s.2.clone())));
     w::tooltip(&chip, move || state.with(|s| s.2.clone()));
@@ -468,27 +469,10 @@ fn status_chip(ui: &Ui, ctx: &Ctx) -> El {
 /// The chip's (variant, text, title); `…` until the first answer.
 type Chip = (&'static str, String, String);
 
-fn chip_state(ctx: &Ctx) -> Signal<Chip> {
-    CHIP.with(|c| {
-        if let Some(s) = c.get() {
-            return s;
-        }
-        let s = Signal::new(("", "…".to_owned(), String::new()));
-        c.set(Some(s));
-        let _ = ctx;
-        s
-    })
-}
-
-thread_local! {
-    static CHIP: Cell<Option<Signal<Chip>>> = const { Cell::new(None) };
-}
-
-fn refresh_chip(ctx: &Ctx, busy: Rc<Cell<bool>>) {
+fn refresh_chip(ctx: &Ctx, busy: Rc<Cell<bool>>, state: Signal<Chip>) {
     if busy.replace(true) {
         return;
     }
-    let state = chip_state(ctx);
     ctx.api.run(api::status(), &Cancel::new(), move |out| {
         busy.set(false);
         let next = match out {
@@ -546,21 +530,25 @@ pub fn pill_text(info: Option<&UpdateInfo>) -> String {
 
 /// The chip every 4 s and the update every 30 minutes, while the page is seen, and both
 /// when it is seen again (main.ts:3797-3810).
-fn start_polls(ui: &Ui, ctx: &Ctx) {
+fn start_polls(ui: &Ui, ctx: &Ctx, chip: Signal<Chip>) {
     let busy: Rc<Cell<bool>> = Rc::default();
-    refresh_chip(ctx, busy.clone());
+    refresh_chip(ctx, busy.clone(), chip);
     let fetched = Rc::new(Cell::new(None::<f64>));
     refresh_update(ctx, fetched.clone(), Rc::default());
-    fn chip_loop(ui: Ui, ctx: Ctx, busy: Rc<Cell<bool>>) {
+    fn chip_loop(ui: Ui, ctx: Ctx, busy: Rc<Cell<bool>>, chip: Signal<Chip>) {
         let u = ui.clone();
         ui.after(CHIP_POLL, move || {
-            if !u.is_occluded() {
-                refresh_chip(&ctx, busy.clone());
+            // The page is gone (this device was asked to pair): the loop ends with it.
+            if chip.get_untracked().is_err() {
+                return;
             }
-            chip_loop(u, ctx, busy);
+            if !u.is_occluded() {
+                refresh_chip(&ctx, busy.clone(), chip);
+            }
+            chip_loop(u, ctx, busy, chip);
         });
     }
-    chip_loop(ui.clone(), ctx.clone(), busy.clone());
+    chip_loop(ui.clone(), ctx.clone(), busy.clone(), chip);
     fn update_loop(ui: Ui, ctx: Ctx, fetched: Rc<Cell<Option<f64>>>) {
         let u = ui.clone();
         ui.after(UPDATE_POLL, move || {
@@ -576,7 +564,7 @@ fn start_polls(ui: &Ui, ctx: &Ctx) {
         if !seen {
             return;
         }
-        refresh_chip(&c, busy.clone());
+        refresh_chip(&c, busy.clone(), chip);
         let stale = fetched.get().is_none_or(|t| now_secs(&u) - t > UPDATE_POLL.as_secs_f64());
         if stale {
             refresh_update(&c, fetched.clone(), Rc::default());
