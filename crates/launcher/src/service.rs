@@ -546,7 +546,34 @@ fn port_owner(port: u16) -> Option<u32> {
         .map(|row| row.dwOwningPid)
 }
 
-#[cfg(not(windows))]
+/// The process listening on IPv4 TCP `port`: its socket's inode from `/proc/net/tcp`,
+/// then the process holding that socket. Only this user's processes can be read, which is
+/// where a Portal this launcher started runs.
+#[cfg(target_os = "linux")]
+fn port_owner(port: u16) -> Option<u32> {
+    let table = fs::read_to_string("/proc/net/tcp").ok()?;
+    let inode = table.lines().skip(1).find_map(|line| {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        let local_port = cols.get(1)?.rsplit(':').next()?;
+        // 0A is LISTEN.
+        (u16::from_str_radix(local_port, 16).ok()? == port && *cols.get(3)? == "0A")
+            .then(|| cols.get(9).map(|inode| inode.to_string()))
+            .flatten()
+    })?;
+    let socket = format!("socket:[{inode}]");
+    fs::read_dir("/proc").ok()?.flatten().find_map(|entry| {
+        let pid: u32 = entry.file_name().to_str()?.parse().ok()?;
+        let mut fds = fs::read_dir(entry.path().join("fd")).ok()?;
+        fds.any(|fd| {
+            fd.ok()
+                .and_then(|fd| fs::read_link(fd.path()).ok())
+                .is_some_and(|target| target.as_os_str() == socket.as_str())
+        })
+        .then_some(pid)
+    })
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 fn port_owner(_port: u16) -> Option<u32> {
     None
 }
