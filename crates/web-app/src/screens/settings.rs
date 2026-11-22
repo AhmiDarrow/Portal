@@ -394,6 +394,11 @@ fn muted(ui: &Ui, text: impl Into<String>) -> El {
     w::text(ui, text.into()).variant("muted")
 }
 
+/// A muted line right under the card's `h2` (their margins collapse in CSS).
+fn intro(ui: &Ui, text: impl Into<String>) -> El {
+    ui.el("p_server_note").text(text.into()).layout(|l| l.margin.bottom = 8.0)
+}
+
 fn note(ui: &Ui, text: impl Into<String>) -> El {
     ui.el("p_server_note").text(text.into()).layout(|l| {
         l.margin.top = 5.6;
@@ -489,7 +494,7 @@ fn select_row(
     pick: impl Fn(usize) + 'static,
 ) -> El {
     let shown = Signal::new(untrack(&current));
-    let sel = w::select(ui, label.to_owned(), options, shown).variant("settings").layout(|l| {
+    let sel = w::select(ui, label.to_owned(), options, shown).variant("settings").justify(Justify::SpaceBetween).layout(|l| {
         l.max_width = Length::Percent(0.6);
         l.width = Length::Px(240.0);
         l.shrink = 1.0;
@@ -526,6 +531,8 @@ fn input(field: &TextField) -> El {
         l.shrink = 1.0;
         l.width = Length::Px(224.0);
         l.min_width = Length::Px(0.0);
+        // `.search input { max-width: 28rem }`
+        l.max_width = Length::Px(448.0);
     })
 }
 
@@ -613,7 +620,7 @@ fn look_card(ui: &Ui, ctx: &Ctx) -> El {
         .child(ui.el("p_font_sample_head").text("Continue watching").layout(|l| l.margin.bottom = 4.0))
         .child(ui.el("p_font_sample_text").text("Season 2 · Episode 5 — 42 min left. Àéîõü Ωμέγα Привет 0123456789"));
     card(ui, "Appearance")
-        .child(note(ui, "Applies to this browser only, so each screen can look its own way."))
+        .child(intro(ui, "Applies to this browser only, so each screen can look its own way."))
         .child(select_row(
             ui,
             "Theme",
@@ -632,7 +639,7 @@ fn playback_card(ui: &Ui, ctx: &Ctx) -> El {
     let p = prefs::signal();
     let (c1, c2, c3) = (ctx.clone(), ctx.clone(), ctx.clone());
     card(ui, "Playback")
-        .child(note(ui, "Shared by every screen that opens Portal, and by the TV. The player's own controls change the same choices."))
+        .child(intro(ui, "Shared by every screen that opens Portal, and by the TV. The player's own controls change the same choices."))
         .child(select_row(
             ui,
             "Quality",
@@ -714,7 +721,8 @@ fn app_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
         .child(switch_row(
             ui,
             "Start with Windows",
-            true,
+            // The encoding line sits between, so no hairline (`.row + .row`).
+            false,
             auto_on,
             move || a.busy.get() || !tray() || !auto_known(),
             move || save_app(&c2, s, false, !auto_on()),
@@ -761,7 +769,13 @@ fn cast_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
         })
         .semantics(move || Semantics::new(Role::Link).label(h2_()).url(h2_()).action(Action::Click));
     let address = when(
-        row(ui, false).layout(|l| l.margin.top = 8.8).child(w::text(ui, "Open this address on a TV:")).child(link),
+        row(ui, false)
+            .layout(|l| {
+                l.margin.top = 8.8;
+                l.gap = (4.0, 4.0);
+            })
+            .child(w::text(ui, "Open this address on a TV:"))
+            .child(link),
         move || !href().is_empty(),
     );
     let waiting = when(note(ui, "The cast link appears when Portal reports an address."), move || on() && href().is_empty());
@@ -894,7 +908,7 @@ fn devices_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
         untrack(|| {
             l2.clear();
             if rows.is_empty() {
-                let _ = l2.clone().child(muted(&u, "No devices are paired."));
+                let _ = l2.clone().child(muted(&u, "No devices are paired.").layout(|l| l.margin.top = 16.0));
                 return;
             }
             for (i, dev) in rows.into_iter().enumerate() {
@@ -923,7 +937,7 @@ fn devices_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
         });
     });
     card(ui, "Devices")
-        .child(note(ui, "A phone, tablet or TV that opens Portal shows a number. Type it here to let that device in."))
+        .child(intro(ui, "A phone, tablet or TV that opens Portal shows a number. Type it here to let that device in."))
         .child(form)
         .child(list)
 }
@@ -1036,7 +1050,7 @@ fn subs_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
             )
         })
     };
-    let intro = note(ui, "");
+    let intro = self::intro(ui, "");
     let i2 = intro.clone();
     let intro = intro.bind(move || {
         let _ = i2.clone().text(remedy_ui::view::RichText::plain(intro_text()));
@@ -1331,7 +1345,7 @@ fn engine_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
     card.child(when(w::text(ui, move || problem.get()).variant("error"), move || !problem.with(String::is_empty)))
         .child(
             row(ui, false)
-                .layout(|l| l.padding.top = 9.6)
+                .padding(Insets { top: 9.6, bottom: 0.0, start: 0.0, end: 0.0 })
                 .child(button(ui, window_label, move || engine_call(&c1, s, None)))
                 .child(button(ui, "Restart Kodi engine", move || engine_call(&c2, s, Some(ServerAction::Restart))))
                 .child(button(ui, "Close Kodi engine", move || {
@@ -1491,7 +1505,7 @@ fn update_card(ui: &Ui, ctx: &Ctx, s: State) -> El {
         .child(note_el)
         .child(
             row(ui, false)
-                .layout(|l| l.padding.top = 9.6)
+                .padding(Insets { top: 9.6, bottom: 0.0, start: 0.0, end: 0.0 })
                 .child(button(ui, "Check for updates", move || check_update(&c1, s)).disabled(working))
                 .child(install)
                 .child(notes),
@@ -1659,6 +1673,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
             .border(k.line)
             .border_width(1.0)
             .radius(8.0)
+            .weight(400.0)
             .padding(Insets { top: 6.72, bottom: 6.72, start: 12.0, end: 12.0 }),
     );
     s.rule("button", Some("settings"), States::HOVER, StylePatch::default().border(k.gold));
