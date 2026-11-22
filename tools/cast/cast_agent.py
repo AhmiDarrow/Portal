@@ -563,8 +563,16 @@ def do_subtitles(cast: Any, subtitles: tuple[str, str] | None, timeout: float) -
     emit({"ok": True})
 
 
-def do_seek(cast: Any, seconds: float, timeout: float) -> None:
+def timed_out(exc: BaseException) -> bool:
+    """pychromecast's RequestTimeout: the TV did not answer a media command in time. The
+    command went out and the connection is fine; a TV loading a new place answers late."""
+    return exc.__class__.__name__ == "RequestTimeout"
+
+
+def do_seek(cast: Any, seconds: float, timeout: float, answer_wait: float = 0) -> None:
+    """Seeks; waits `answer_wait` seconds (else `timeout`) for the TV's answer."""
     mc = media_controller(cast, timeout)
+    wait = answer_wait if answer_wait > 0 else timeout
     status = getattr(mc, "status", None)
     url = str(getattr(status, "content_id", None) or "")
     growing = finite(getattr(status, "duration", None)) is None
@@ -572,13 +580,22 @@ def do_seek(cast: Any, seconds: float, timeout: float) -> None:
         # A playlist loaded while still growing plays as live and ignores
         # seeks, so load it again at the new time.
         reload_at(mc, status, url, seconds, active_subtitles(status))
-    else:
-        paused = player_state_of(status) == "PAUSED"
-        mc.seek(seconds)
+        emit({"ok": True})
+    paused = player_state_of(status) == "PAUSED"
+    # A far seek on a whole-title cast has the TV ask for a part Portal is still
+    # encoding; it answers once it is there, which can take longer than `timeout`.
+    # The seek was sent and the TV keeps loading, so that is not a failure.
+    answered = True
+    try:
+        mc.seek(seconds, timeout=wait)
         if paused:
             # A seek always asks the receiver to resume, so pause it again.
-            mc.pause()
-    emit({"ok": True})
+            mc.pause(timeout=wait)
+    except Exception as exc:
+        if not timed_out(exc):
+            raise
+        answered = False
+    emit({"ok": True, "answered": answered})
 
 
 def do_volume(cast: Any, level: float | None, muted: bool | None) -> None:
@@ -838,6 +855,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subtitles", default="")
     parser.add_argument("--subtitles-lang", default="")
     parser.add_argument("--seconds", type=finite_number, default=-1)
+    # How long a seek waits for the TV's answer before reporting it sent (Portal's
+    # seek_answer_wait); 0 uses --timeout.
+    parser.add_argument("--answer-wait", type=finite_number, default=0)
     parser.add_argument("--level", type=finite_number, default=None)
     parser.add_argument("--muted", choices=("true", "false"), default=None)
     parser.add_argument("--timeout", type=float, default=0)
@@ -969,14 +989,16 @@ def run(argv: list[str]) -> None:
             elif args.command == "seek":
                 if args.seconds < 0 or args.seconds != args.seconds:
                     fail("A seek time is required.", "bad_request")
-                do_seek(cast, args.seconds, limit)
+                do_seek(cast, args.seconds, limit, max(args.answer_wait, 0.0))
             else:
                 fail("Unknown cast command.", "bad_request")
         except SystemExit:
             raise
-        except Exception:
-            if SERVING:
+        except Exception as exc:
+            if SERVING and not timed_out(exc):
                 # A connection that threw may be broken; the next command connects again.
+                # A TV slow to answer is still connected, and the watch uses the same
+                # connection: dropping it would end the cast.
                 forget_cast(device_id)
             raise
         finally:

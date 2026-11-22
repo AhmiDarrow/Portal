@@ -234,8 +234,9 @@ impl List {
 
 // ---- Status, updates, engine ----
 
+/// No time limit, as the old page's `fetch`: a busy Kodi answers late, not "offline".
 pub fn status() -> Call<Status> {
-    get("/api/status")
+    get("/api/status").no_timeout()
 }
 pub fn update() -> Call<UpdateInfo> {
     get("/api/update")

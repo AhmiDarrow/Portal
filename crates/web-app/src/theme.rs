@@ -57,9 +57,13 @@ pub fn palette_id(id: &str, prefers_dark: Option<bool>) -> &'static str {
 
 /// The theme for the choice `id`.
 pub fn resolve(id: &str, prefers_dark: Option<bool>) -> Theme {
-    portal_theme(palette_id(id, prefers_dark))
+    let mut t = portal_theme(palette_id(id, prefers_dark))
         .or_else(|| portal_theme(DEFAULT))
-        .unwrap_or_else(Theme::dark_forest)
+        .unwrap_or_else(Theme::dark_forest);
+    // A long online track name ("English · release · source") ends in "…" by 15rem, so the
+    // bar keeps its clock and buttons.
+    t.metrics.insert("player-captions-max-width".into(), 240.0);
+    t
 }
 
 /// Portal's sheet, plus `portal_page`: the page's background color under its two gold glows
