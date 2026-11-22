@@ -216,10 +216,13 @@ fn header(ui: &Ui, ctx: &Ctx, chip: Signal<Chip>) -> El {
     // Wide: brand, nav, tools. Under 720 px brand and tools share the first row and the nav
     // takes the second, scrolling sideways. One nav for each place, the other hidden.
     let wide_nav = nav(ui, ctx);
-    let narrow_nav = nav(ui, ctx).layout(|l| {
-        l.wrap = false;
-        l.width = Length::Percent(1.0);
-    });
+    let narrow_nav = nav(ui, ctx)
+        .layout(|l| {
+            l.wrap = false;
+            l.width = Length::Percent(1.0);
+        })
+        // .top nav { padding-bottom: 0.15rem }
+        .padding(Insets { top: 0.0, bottom: 2.4, start: 0.0, end: 0.0 });
     let panel = activity::panel(ui, &ctx.activity)
         .layout(|l| l.margin = Insets { top: 4.0, bottom: 0.0, start: 0.0, end: 0.0 })
         .layout(|l| l.width = Length::Percent(1.0));
@@ -560,8 +563,14 @@ fn start_polls(ui: &Ui, ctx: &Ctx, chip: Signal<Chip>) {
     }
     update_loop(ui.clone(), ctx.clone(), fetched.clone());
     let (c, u) = (ctx.clone(), ui.clone());
+    // `visibilitychange` to visible: only after the page was hidden, not when it first shows.
+    let hidden = Rc::new(Cell::new(false));
     let _ = ui.root().on_visibility(move |seen| {
         if !seen {
+            hidden.set(true);
+            return;
+        }
+        if !hidden.replace(false) {
             return;
         }
         refresh_chip(&c, busy.clone(), chip);
