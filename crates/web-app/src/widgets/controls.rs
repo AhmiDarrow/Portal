@@ -141,7 +141,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     s.rule("p_link", Some("meta"), States::NONE, StylePatch::default().foreground(k.muted).text_size(14.08));
     s.rule("p_link", Some("meta"), States::HOVER, StylePatch::default().foreground(k.gold));
     // .brand: the heading face at 24 px in the text color, gold under the pointer.
-    s.rule("p_link", Some("brand"), States::NONE, StylePatch::default().foreground(k.text).heading(true).text_size(24.0));
+    s.rule("p_link", Some("brand"), States::NONE, StylePatch::default().foreground(k.text).heading(true).text_size(24.0).line_height(remedy_ui::style::LineHeight::Relative(1.0)));
     s.rule("p_link", Some("brand"), States::HOVER, StylePatch::default().foreground(k.gold));
     // .update-pill: a gold ring on a gold-tinted background, 0.9em.
     s.rule(

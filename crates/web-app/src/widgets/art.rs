@@ -146,19 +146,28 @@ pub fn art(ui: &Ui, art: Option<&str>, name: &str, variant: &'static str) -> El 
             })
         }
     };
+    // The frame's height follows its width (CSS `aspect-ratio` on the border box, the
+    // hairline included), set from the measured width so the inner box is definite.
     let i2 = inner.clone();
-    let inner = inner.on_resize(move |s| width.set(s.width)).bind(move || {
-        let pad = if frame.get() == Frame::Square { width.get() * 0.18 } else { 0.0 };
-        let _ = i2.clone().layout(move |l| l.padding = Insets::all(pad));
+    let line = if rule { 1.0 } else { 0.0 };
+    let inner = inner.layout(|l| l.shrink = 0.0).bind(move || {
+        let w = width.get();
+        let f = frame.get();
+        let pad = if f == Frame::Square { w * 0.18 } else { 0.0 };
+        let h = (w / f.aspect() - line).max(0.0);
+        let _ = i2.clone().padding(Insets::all(pad)).layout(move |l| {
+            l.grow = 0.0;
+            l.height = Length::Px(h);
+        });
     });
     let mut outer = ui.el("p_art_frame").column().fill_width().child(inner);
     if rule {
         outer = outer.child(ui.el("p_art_rule").fill_width().height(1.0).layout(|l| l.shrink = 0.0));
     }
-    let o2 = outer.clone();
-    outer.bind(move || {
-        let a = frame.get().aspect();
-        let _ = o2.clone().layout(move |l| l.aspect_ratio = Some(a));
+    outer.on_resize(move |s| {
+        if width.get_untracked().ok() != Some(s.width) {
+            width.set(s.width);
+        }
     })
 }
 
@@ -173,10 +182,12 @@ pub fn letter_tile(ui: &Ui, name: &str) -> El {
         .child(ui.el("p_art_letter_text").text(letter(name)).nowrap())
 }
 
+/// `.art`'s glow over the well, as styles.css writes it.
+pub const GLOW: &str = "radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--gold) 16%, transparent), transparent 62%)";
+
 pub fn rules(s: &mut StyleSheet, k: &Look) {
     // .art: the well under a gold glow around 50% 42%.
-    let glow = gradient("radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--gold) 16%, transparent), transparent 62%)");
-    s.rule("p_art", None, States::NONE, StylePatch::default().background(k.well).background_layers(glow));
+    s.rule("p_art", None, States::NONE, StylePatch::default().background(k.well).background_layers(gradient(GLOW)));
     s.rule("p_art_rule", None, States::NONE, StylePatch::default().background(k.line));
     s.rule("p_art_letter_text", None, States::NONE, StylePatch::default().foreground(k.gold).heading(true).text_size(32.0));
 }
@@ -203,6 +214,11 @@ mod tests {
         assert_eq!(poster_from_id("plugin://x/?art=%7B%22poster%22%3A%22http%3A%2F%2Fa%22%7D"), None);
         assert_eq!(poster_from_id("tt123"), None);
         assert_eq!(decode_component("a+b%2"), "a b%2");
+    }
+
+    #[test]
+    fn the_glow_parses() {
+        assert_eq!(gradient(GLOW).len(), 1);
     }
 
     #[test]
