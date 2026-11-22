@@ -113,7 +113,7 @@ class SeekTest(unittest.TestCase):
         cast_agent.write_line = rows.append
         try:
             with self.assertRaises(SystemExit) as end:
-                cast_agent.do_seek(cast, 2450.0, 20.0)
+                cast_agent.do_seek(cast, 2450.0, 20.0, 30.0)
         finally:
             cast_agent.write_line = old
         return end.exception.code, rows, cast.media_controller.calls
@@ -122,7 +122,7 @@ class SeekTest(unittest.TestCase):
         code, rows, calls = self.run_seek("PLAYING")
         self.assertEqual(code, 0)
         self.assertEqual(rows, [{"ok": True, "answered": False}])
-        self.assertEqual(calls, [("seek", 2450.0, 20.0)])
+        self.assertEqual(calls, [("seek", 2450.0, 30.0)])
 
     def test_slow_answers_keep_the_connection(self) -> None:
         self.assertTrue(cast_agent.timed_out(RequestTimeout("x")))

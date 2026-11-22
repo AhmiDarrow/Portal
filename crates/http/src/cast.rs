@@ -1683,9 +1683,8 @@ async fn device_control(
     if command == "seek" {
         // The helper waits this long for the TV's answer, then says the seek was sent.
         let wait = seek_answer_wait();
-        if let Some(at) = args.iter().position(|a| a == "--timeout") {
-            args[at + 1] = format!("{:.3}", wait.as_secs_f64());
-        }
+        args.push("--answer-wait".into());
+        args.push(format!("{:.3}", wait.as_secs_f64()));
         limit = limit.max(wait.saturating_add(CONTROL_LIMIT));
     }
     run_agent(args, limit).await.map_err(agent_error)?;
