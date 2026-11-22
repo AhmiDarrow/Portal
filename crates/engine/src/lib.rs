@@ -28,7 +28,7 @@ pub use error::{public_error, EngineError};
 pub use playback::{
     picks_source, release_name, shift_vtt, source_cap, Encoder, Player, CAST_INIT, CAST_PLAYLIST,
 };
-pub use process::{ProcessConfig, Supervisor};
+pub use process::{public_ip, public_web_host, ProcessConfig, Supervisor};
 pub use prompts::Prompts;
 pub use rpc::{KodiClient, Note, RpcFail};
 pub use settings::Settings;

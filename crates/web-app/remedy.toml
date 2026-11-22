@@ -1,0 +1,10 @@
+# `cargo remedy package --target web` (tools/build-web-app.ps1) reads this.
+[app]
+name = "Portal"
+id = "app.portal.web"
+description = "Portal: a local dashboard for one Kodi video add-on, with continue watching, a watchlist, bookmarks, history, and a player."
+
+[web]
+short_name = "Portal"
+theme_color = "#14120e"
+icon = "assets/icon.svg"

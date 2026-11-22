@@ -79,7 +79,7 @@ async fn keys_are_checked_before_saving_and_never_returned() {
         .await
         .unwrap_err();
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
-    assert_eq!(err.1 .0["detail"], opensubtitles::KEY_REFUSED);
+    assert_eq!(err.1 .0.detail, opensubtitles::KEY_REFUSED);
 
     // Signing in needs a key first.
     let err = subtitles
@@ -89,7 +89,7 @@ async fn keys_are_checked_before_saving_and_never_returned() {
         )
         .await
         .unwrap_err();
-    assert_eq!(err.1 .0["detail"], NEED_KEY_FIRST);
+    assert_eq!(err.1 .0.detail, NEED_KEY_FIRST);
 
     settings::save(
         &dir.join("subtitles.json"),
@@ -133,7 +133,7 @@ async fn subdl_and_subsource_keys_work_like_the_opensubtitles_key() {
             .await
             .unwrap_err();
         assert_eq!(err.0, StatusCode::BAD_REQUEST);
-        assert_eq!(err.1 .0["detail"], detail);
+        assert_eq!(err.1 .0.detail, detail);
     }
     let err = subtitles
         .apply(peer("192.168.1.20"), put(r#"{"subdl_key": null}"#))
@@ -318,10 +318,10 @@ async fn cached_files_are_shifted_without_a_download() {
     assert_eq!(err.0, StatusCode::NOT_FOUND);
     let err = subtitles.file("opensubtitles:123", 0.0).await.unwrap_err();
     assert_eq!(err.0, StatusCode::BAD_GATEWAY);
-    assert_eq!(err.1 .0["detail"], NO_KEY);
+    assert_eq!(err.1 .0.detail, NO_KEY);
     let err = subtitles.file("subsource:123", 0.0).await.unwrap_err();
     assert_eq!(err.0, StatusCode::BAD_GATEWAY);
-    assert_eq!(err.1 .0["detail"], NO_SUBSOURCE_KEY);
+    assert_eq!(err.1 .0.detail, NO_SUBSOURCE_KEY);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -354,7 +354,7 @@ async fn season_pack_files_are_kept_per_episode() {
     subtitles.remember(&[listed((1, 3))]);
     assert_eq!(subtitles.files.get(&file_key(id, Some((1, 3)))), None);
     let err = subtitles.file(id, 0.0).await.unwrap_err();
-    assert_eq!(err.1 .0["detail"], NO_SUBSOURCE_KEY);
+    assert_eq!(err.1 .0.detail, NO_SUBSOURCE_KEY);
     // An id that names its episode keeps it, whatever was searched last.
     assert_eq!(
         split_episode("subsource:77@S01E02"),
