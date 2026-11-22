@@ -13,11 +13,12 @@
 //! 5 s while playing (an 8 s ticker that also keeps the stream alive and looks for a next
 //! season near the end), and at once on pause, close and when the page is hidden.
 //!
-//! Seams left for later phases: subtitles (P9, `captions_seam` in `view.rs`: a disabled CC
-//! button where the captions control goes) and casting (P10, the Cast button and
-//! [`Player::on_cast`]).
+//! Subtitles (P9) are in [`subs`]: the player's own captions control and cues, fed with the
+//! job's tracks and the online search. Seam left for a later phase: casting (P10, the Cast
+//! button and [`Player::on_cast`]).
 
 mod episodes;
+pub mod subs;
 mod view;
 
 use std::cell::{Cell, RefCell};
@@ -88,6 +89,7 @@ pub(crate) struct Inner {
     /// Theater was asked for, this dock session (`theaterWanted`).
     pub(crate) theater: Signal<bool>,
     pub(crate) episodes: episodes::Episodes,
+    subs: subs::Subs,
 }
 
 #[derive(Default)]
@@ -353,8 +355,10 @@ impl Dock {
             audio: Signal::new((Vec::new(), None)),
             theater: Signal::new(false),
             episodes: episodes::Episodes::new(),
+            subs: subs::Subs::default(),
         }));
         d.wire();
+        d.wire_subs();
         d
     }
 
@@ -731,6 +735,7 @@ impl Dock {
         };
         self.clear_play_activity();
         self.stop_ticker();
+        self.reset_subs();
         self.0.job.set_if_changed(None);
         self.0.audio.set((Vec::new(), None));
         self.0.target.set_if_changed(None);
@@ -938,18 +943,22 @@ impl Dock {
             std::mem::take(&mut st.as_next)
         };
         self.paint_audio(Some(job));
-        // P9: the job's subtitles (`job.subtitles`, `subtitles_pending`) and the online search
-        // start here, as player.ts `fillSubtitles`, `awaitSubtitles` and `searchSubtitles`.
         let mut timeline = Timeline::new(dur(origin));
         if duration > 0.0 {
             timeline = timeline.length(dur(duration));
         }
         let source = MediaSource::url(playlist);
-        if as_next && self.0.player.starting_next().is_some() {
-            self.0.player.start_next(source, Some(timeline));
-        } else {
-            self.0.player.replace_source(source, timeline);
-        }
+        let new_work = as_next && self.0.player.starting_next().is_some();
+        // The player carries its captions pick to the new stream; the dock sets it after.
+        self.quietly(|| {
+            if new_work {
+                self.0.player.start_next(source, Some(timeline));
+            } else {
+                self.0.player.replace_source(source, timeline);
+            }
+        });
+        // player.ts `fillSubtitles`, `awaitSubtitles` and `searchSubtitles`.
+        self.attach_subs(job, new_work);
         self.clear_play_activity();
         self.0.ctx.activity.notice("");
         self.set_status("");
