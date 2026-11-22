@@ -86,11 +86,24 @@ pub fn view(ui: &Ui, ctx: &Ctx, path: &str) -> El {
     let path = path.to_owned();
     load(ctx, &path, shown, source);
     let (r2, u, c) = (root.clone(), ui.clone(), ctx.clone());
+    let last: Rc<RefCell<Option<(bool, bool, Option<BrowseSource>)>>> = Rc::default();
+    let painted: Rc<RefCell<Option<BrowsePage>>> = Rc::default();
     root.bind(move || {
         let now = shown.get();
         let src = source.get();
-        c.width.get();
-        c.me.get();
+        let phone = c.width.get() <= 720.0;
+        let remote = c.is_remote();
+        // A page that would paint the same stays (a rebuild loses the scroll position).
+        let key = Some((phone, remote, src.clone()));
+        let page = match &now {
+            Shown::Folder(p) => Some(p.clone()),
+            _ => None,
+        };
+        if page.is_some() && *last.borrow() == key && *painted.borrow() == page {
+            return;
+        }
+        *last.borrow_mut() = key;
+        *painted.borrow_mut() = page;
         untrack(|| {
             r2.clear();
             let el = match now {

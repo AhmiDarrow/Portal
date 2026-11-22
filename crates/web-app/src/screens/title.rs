@@ -131,13 +131,16 @@ fn details(ui: &Ui, ctx: &Ctx, title: &TitleDetail, phone: bool) -> El {
         .child(save_button_for(ui, ctx, List::Bookmarks, save, "pill"))
         .child(info_btn);
     let kind = format!("{}{}", if title.kind == TitleKind::Tv { "Show" } else { "Movie" }, if title.watched { " · Watched" } else { "" });
+    // `.hero > div`: as wide as its content wants, so the actions stay on one line while
+    // they fit.
     let text = w::column(ui)
+        .grow(1.0)
         .layout(|l| {
             l.min_width = Length::Px(0.0);
             l.shrink = 1.0;
         })
         .child(h1(ui, &title.name))
-        .child(w::text(ui, kind).variant("muted").layout(|l| l.margin = Insets { top: 0.0, bottom: 16.0, start: 0.0, end: 0.0 }))
+        .child(w::text(ui, kind).variant("muted").layout(|l| l.margin = Insets { top: 6.4, bottom: 16.0, start: 0.0, end: 0.0 }))
         .child(row);
     let poster = ui
         .el("p_details_art")
