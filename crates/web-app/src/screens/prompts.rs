@@ -152,7 +152,11 @@ pub fn show(ui: &Ui, ctx: &Ctx, p: &Prompt, hooks: Hooks) {
         PromptKind::Text => {
             let field = if secret_title(&p.title) { w::secret_input(ui, heading.clone()) } else { w::text_input(ui, heading.clone()) };
             let (c, pr, h, f2) = (ctx.clone(), p.clone(), hooks.clone(), field.clone());
-            let submit: Rc<dyn Fn()> = Rc::new(move || answer(&c, &pr, PromptAction::Submit, Some(f2.value()), None, &h));
+            // A secret field keeps its text from `value()`; it is taken out once, here.
+            let submit: Rc<dyn Fn()> = Rc::new(move || {
+                let text = if f2.kind() == remedy_ui::view::FieldKind::Secret { f2.take_secret().expose().to_owned() } else { f2.value() };
+                answer(&c, &pr, PromptAction::Submit, Some(text), None, &h);
+            });
             let s2 = submit.clone();
             let input = field.on_submit(move || s2()).el().variant("portal_search").fill_width();
             first = Some(input.clone());
@@ -302,6 +306,163 @@ fn content_type(name: &str) -> &'static str {
         Some("txt") => "text/plain",
         _ => "application/octet-stream",
     }
+}
+
+/// How an add-on action's dialogs ended (player.ts `awaitAddonPrompts`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// A dialog showed and closed.
+    Prompted,
+    /// No dialog came up.
+    Idle,
+    /// The add-on opened its settings: Portal's own form took over.
+    Settings,
+}
+
+/// How long [`await_addon_prompts`] watches, in milliseconds: at most `limit` in all (a
+/// device sign-in waits for its code), `quiet` after the last dialog, `idle` for a first
+/// one, `settle` after one closed, polling every `poll`. [`set_watch`] changes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Watch {
+    pub limit: u64,
+    pub quiet: u64,
+    pub idle: u64,
+    pub settle: u64,
+    pub poll: u64,
+}
+
+impl Default for Watch {
+    fn default() -> Self {
+        Watch { limit: 15 * 60_000, quiet: 120_000, idle: 4_000, settle: 1_500, poll: 400 }
+    }
+}
+
+thread_local! {
+    static WATCH: Cell<Watch> = Cell::new(Watch::default());
+}
+
+pub fn set_watch(w: Watch) {
+    WATCH.with(|c| c.set(w));
+}
+
+/// What an action's dialog says, for the page: the text, and the progress dialog when it
+/// can be cancelled.
+pub type OnNote = Rc<dyn Fn(String, Option<Prompt>)>;
+
+/// Mirrors the dialogs an add-on action opens until they close (player.ts
+/// `awaitAddonPrompts`): questions show as the modal, progress as `on_note`. The add-on
+/// opening its settings in Kodi opens Portal's form for them instead.
+pub fn await_addon_prompts(ui: &Ui, ctx: &Ctx, on_note: OnNote, done: impl FnOnce(Outcome) + 'static) {
+    use remedy_ui::core::time::Instant;
+    let w = WATCH.with(Cell::get);
+    let started = Instant::now();
+    let st = Rc::new(RefCell::new((w.quiet, false, None::<u64>, Some(Box::new(done) as Box<dyn FnOnce(Outcome)>))));
+    fn tick(ui: Ui, ctx: Ctx, on_note: OnNote, started: remedy_ui::core::time::Instant, w: Watch, st: Rc<RefCell<(u64, bool, Option<u64>, Option<Box<dyn FnOnce(Outcome)>>)>>) {
+        let ms = move || started.elapsed().as_millis() as u64;
+        let finish = |st: &Rc<RefCell<(u64, bool, Option<u64>, Option<Box<dyn FnOnce(Outcome)>>)>>, o: Outcome| {
+            if let Some(d) = st.borrow_mut().3.take() {
+                d(o);
+            }
+        };
+        if ms() >= st.borrow().0 {
+            hide();
+            let saw = st.borrow().1;
+            finish(&st, if saw { Outcome::Prompted } else { Outcome::Idle });
+            return;
+        }
+        let (u2, c2) = (ui.clone(), ctx.clone());
+        ctx.api.run(api::prompt(), &Cancel::new(), move |out| {
+            let again = |u: &Ui, c: &Ctx| {
+                let (u3, c3, n3, s3) = (u.clone(), c.clone(), on_note.clone(), st.clone());
+                u.after(std::time::Duration::from_millis(w.poll), move || tick(u3, c3, n3, started, w, s3));
+            };
+            let read = match out {
+                Ok(r) => r,
+                Err(_) => return again(&u2, &c2),
+            };
+            if let Some(addon) = read.settings_addon.filter(|a| !a.is_empty()) {
+                hide();
+                c2.go(&crate::pages::Page::AddonSettings(addon));
+                finish(&st, Outcome::Settings);
+                return;
+            }
+            let now = ms();
+            match read.prompt {
+                Some(p) => {
+                    {
+                        let mut s = st.borrow_mut();
+                        s.1 = true;
+                        s.2 = None;
+                        s.0 = w.limit.min(s.0.max(now + w.quiet));
+                    }
+                    if p.kind == PromptKind::Progress {
+                        hide();
+                        on_note(progress_note(&p), Some(p));
+                    } else if has_words(&p) {
+                        let c3 = c2.clone();
+                        let hooks = Hooks { on_error: Rc::new(move |e| c3.activity.notice(e)), after: Rc::new(|_, _| {}) };
+                        show(&u2, &c2, &p, hooks);
+                        let t = p.title.trim();
+                        on_note(if t.is_empty() { "Waiting for your answer…".into() } else { t.to_owned() }, None);
+                    } else {
+                        hide();
+                        on_note("Working…".into(), None);
+                    }
+                }
+                None => {
+                    hide();
+                    let (saw, since) = (st.borrow().1, st.borrow().2);
+                    if saw {
+                        match since {
+                            None => st.borrow_mut().2 = Some(now),
+                            Some(t) if now - t > w.settle => return finish(&st, Outcome::Prompted),
+                            Some(_) => {}
+                        }
+                    } else if now > w.idle {
+                        return finish(&st, Outcome::Idle);
+                    }
+                }
+            }
+            again(&u2, &c2);
+        });
+    }
+    tick(ui.clone(), ctx.clone(), on_note, started, w, st);
+}
+
+/// A Run row of a folder (main.ts `openRunItem` and `runAddonAction`): Kodi runs the
+/// plugin link, then whatever dialog it opens shows here.
+pub fn run_addon_action(ui: &Ui, ctx: &Ctx, label: &str, path: &str) {
+    use crate::widgets::activity::{describe_action, Owner};
+    if !path.to_ascii_lowercase().contains("plugin://") {
+        ctx.activity.notice("That item runs an add-on action, not a video.");
+        return;
+    }
+    if ctx.is_remote() {
+        ctx.activity.notice("Add-on tools run only on the PC running Portal.");
+        return;
+    }
+    let ticket = ctx.activity.begin(Owner::Page, describe_action(Some(label)), 0);
+    let (u, c) = (ui.clone(), ctx.clone());
+    ctx.api.run(api::run_plugin(path), &Cancel::new(), move |out| match out {
+        Ok(r) if r.ran => {
+            c.activity.notice("Opening…");
+            let c2 = c.clone();
+            let note: OnNote = Rc::new(move |text, _| c2.activity.notice(text));
+            let c3 = c.clone();
+            await_addon_prompts(&u, &c, note, move |o| {
+                c3.activity.notice(if o == Outcome::Idle { "The add-on did not open a dialog." } else { "" });
+                c3.activity.end(ticket);
+            });
+        }
+        Ok(_) => {
+            c.activity.notice("That item runs an add-on action, not a video.");
+            c.activity.end(ticket);
+        }
+        Err(e) => {
+            c.activity.notice(crate::api::shown_detail(&e));
+            c.activity.end(ticket);
+        }
+    });
 }
 
 /// `.prompt` and `.prompt-card` (styles.css).

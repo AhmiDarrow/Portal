@@ -442,18 +442,8 @@ pub fn open_item(ctx: &Ctx, folder: &str, item: &BrowseItem, resume: Option<f64>
             ctx.go(&Page::Browse(item.path.clone()));
         }
         ItemKind::Run => {
-            if !item.path.to_ascii_lowercase().contains("plugin://") || ctx.is_remote() {
-                if ctx.is_remote() {
-                    ctx.activity.notice("Add-on tools run only on the PC running Portal.");
-                }
-                return;
-            }
-            let c = ctx.clone();
-            ctx.api.run(api::run_plugin(&item.path), &Cancel::new(), move |out| {
-                if let Err(e) = out {
-                    c.activity.notice(shown_detail(&e));
-                }
-            });
+            let ui = ctx.activity.ui();
+            crate::screens::prompts::run_addon_action(&ui, ctx, &item.label, &item.path);
         }
         ItemKind::Play => {
             let info = media_of(folder, item).map(|m| m.seed).or(item.info.clone());
