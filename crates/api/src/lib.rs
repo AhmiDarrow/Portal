@@ -370,15 +370,15 @@ pub struct ProgressReport {
     pub id: String,
     pub kind: TitleKind,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub art: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub season: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub episode: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub episode_name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
     pub position: f64,
     pub duration: f64,
@@ -452,22 +452,22 @@ pub struct PlayRequest {
     pub title: String,
     #[serde(default)]
     pub quality: Quality,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub season: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub episode: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub art: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_title: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_id: Option<String>,
     /// Seconds to seek before the first HLS segment. Values of 60 or below are ignored.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_seconds: Option<f64>,
     /// When true, a source list the add-on shows is handed to the viewer
     /// instead of Portal choosing a copy for the quality.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub manual_links: bool,
     /// Language to prefer when the file has more than one audio track, e.g. "en".
     /// Absent means a saved player choice, then the file's own default track.
