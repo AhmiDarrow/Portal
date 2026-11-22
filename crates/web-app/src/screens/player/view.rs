@@ -436,13 +436,6 @@ fn links_button(d: &Dock) -> El {
     b
 }
 
-/// P10's seam: `#dock-cast`, disabled until casting is ported ([`Player::on_cast`]).
-fn cast_button(d: &Dock) -> El {
-    let b = crate::widgets::button(&d.inner().ui, "Cast", || {}).disabled(true);
-    w::tooltip(&b, "Cast");
-    b
-}
-
 /// The Quality menu: Auto, Source, 4K, 1080p, 720p, 480p.
 fn quality_field(d: &Dock) -> El {
     const QUALITIES: [(Quality, &str); 6] = [
@@ -555,7 +548,7 @@ fn side(d: &Dock) -> El {
             l.gap = (8.0, 8.0);
         })
         .child(next_button(d))
-        .child(cast_button(d))
+        .child(super::cast::button(d))
         .child(links_button(d));
     let prefs = ui
         .el("p_dock_prefs")
@@ -923,4 +916,5 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     s.rule("button", Some("dock"), States::DISABLED, StylePatch::default().opacity(0.45));
     s.rule("check", Some("dock"), States::CHECKED, StylePatch::default().background(k.gold).foreground(k.bg));
     episodes::rules(s, k);
+    super::cast::rules(s, k);
 }
