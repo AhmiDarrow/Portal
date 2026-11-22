@@ -33,6 +33,15 @@ thread_local! {
     static SOURCE: RefCell<Option<BrowseSource>> = const { RefCell::new(None) };
 }
 
+/// The add-on Portal browses, once it was looked up (main.ts `browseSource`).
+pub fn known_source() -> Option<BrowseSource> {
+    SOURCE.with(|s| s.borrow().clone())
+}
+
+pub fn note_source(s: BrowseSource) {
+    SOURCE.with(|x| *x.borrow_mut() = Some(s));
+}
+
 pub fn set_cache_limit(n: usize) {
     LIMIT.with(|l| l.set(n));
 }
@@ -252,6 +261,11 @@ fn run_search(ctx: &Ctx, query: &str, shown: Signal<Shown>, field: &remedy_ui::v
 
 fn paint(ui: &Ui, ctx: &Ctx, page: &BrowsePage, query: Option<String>, shown: Signal<Shown>, source: Option<BrowseSource>) -> El {
     let phone = ctx.width.get_untracked().unwrap_or(1280.0) <= 720.0;
+    if query.is_none() {
+        if let Some(target) = crate::widgets::play::source_pick(&page.path) {
+            return sources(ui, ctx, page, target);
+        }
+    }
     let form = search_form(ui, ctx, &page.path, query.as_deref(), shown);
     if query.is_none() {
         if let Some(el) = show::folder_view(ui, ctx, page, &heading(&page.path), source.clone(), form.clone()) {
@@ -299,4 +313,95 @@ fn paint(ui: &Ui, ctx: &Ctx, page: &BrowsePage, query: Option<String>, shown: Si
         browse_card::grid(ui, cards, phone)
     };
     w::column(ui).fill_width().child(head).child(form).child(items)
+}
+
+/// An add-on's source list for one item (main.ts `paintSources`), as rows to scan rather than
+/// cards that all carry the same picture. A pick plays as that item, so the player, history
+/// and Continue keep its own name and episode.
+fn sources(ui: &Ui, ctx: &Ctx, page: &BrowsePage, target: crate::widgets::play::PlayTarget) -> El {
+    use crate::widgets::episode_row::other_row;
+    use crate::widgets::titles::{episode_line, format_clock, resume_of};
+    use remedy_ui::a11y::{Role, Semantics};
+    let name = target.show_title.clone().unwrap_or_else(|| target.title.clone());
+    let line = if target.show_title.is_some() { episode_line(target.season, target.episode, Some(&target.title)) } else { String::new() };
+    let resume = resume_of(target.resume_seconds);
+    let n = page.items.len();
+    // `main > p`: 1em above and below (the h1's 0.6rem collapsing into it), at most 68ch.
+    let p = |text: String| {
+        w::text(ui, text).variant("muted").layout(|l| {
+            l.margin.top = 16.0;
+            l.max_width = Length::Ch(68.0);
+        })
+    };
+    let mut col = w::column(ui)
+        .fill_width()
+        .child(p("Choose a source".into()))
+        .child(h1(ui, &name).layout(|l| {
+            l.margin.top = 16.0;
+            l.margin.bottom = 0.0;
+        }));
+    if !line.is_empty() {
+        col = col.child(p(line));
+    }
+    let from = resume.map(|r| format!(" from {}", format_clock(r))).unwrap_or_default();
+    col = col.child(p(format!("{n} {} from the add-on. Pick one to play it{from}.", if n == 1 { "source" } else { "sources" })));
+    if n == 0 {
+        return col.child(p("The add-on listed no sources.".into()));
+    }
+    let rows: Vec<El> = page
+        .items
+        .iter()
+        .map(|item| {
+            let label = if item.label.is_empty() { "Untitled".to_owned() } else { split_bars(&item.label) };
+            let (c, it, t, folder) = (ctx.clone(), item.clone(), target.clone(), page.path.clone());
+            let row = other_row(ui, &label, move || {
+                if it.kind == portal_api::ItemKind::Play {
+                    crate::widgets::play::play(&c, crate::widgets::play::PlayTarget { file: it.path.clone(), manual_links: false, ..t.clone() });
+                } else {
+                    open_item(&c, &folder, &it, None);
+                }
+            })
+            .layout(|l| l.margin = remedy_ui::core::Insets::ZERO);
+            ui.el("p_source_item").column().fill_width().semantics(Semantics::new(Role::ListItem)).child(row)
+        })
+        .collect();
+    // .source-list: 1rem above, 0.35rem between rows, at most 60rem wide.
+    let list = ui
+        .el("p_source_list")
+        .column()
+        .gap(5.6)
+        .fill_width()
+        .layout(|l| {
+            l.margin.top = 16.0;
+            l.max_width = Length::Px(960.0);
+        })
+        .semantics(Semantics::new(Role::List))
+        .children(rows);
+    col.child(list)
+}
+
+/// `label.replace(/\s*\|\s*/g, " · ")`: each bar and the spaces around it.
+fn split_bars(label: &str) -> String {
+    let parts: Vec<&str> = label.split('|').collect();
+    let last = parts.len() - 1;
+    parts
+        .iter()
+        .enumerate()
+        .map(|(i, part)| match (i == 0, i == last) {
+            (true, true) => *part,
+            (true, false) => part.trim_end(),
+            (false, true) => part.trim_start(),
+            (false, false) => part.trim(),
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn source_labels_split_at_bars() {
+        assert_eq!(super::split_bars(" 1080p | RD |x"), " 1080p · RD · x");
+        assert_eq!(super::split_bars("plain "), "plain ");
+    }
 }
