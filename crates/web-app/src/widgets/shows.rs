@@ -67,6 +67,35 @@ fn season_label_number(label: &str) -> Option<u32> {
     rest[..n].parse().ok()
 }
 
+/// The memory as the old page writes it under `portal-seasons` (api.ts `SeasonMemory`):
+/// `{"seasonToShow": {}, "seasonNumber": {}, "showName": {}, "labels": {}}`.
+pub fn memory_json() -> String {
+    mem(|m| {
+        serde_json::json!({
+            "seasonToShow": m.season_to_show,
+            "seasonNumber": m.season_number,
+            "showName": m.show_name,
+            "labels": m.labels,
+        })
+        .to_string()
+    })
+}
+
+/// Loads what the old page saved (api.ts `loadMemory`): a part that is missing or not an
+/// object of the right values is left empty.
+pub fn load_memory_json(text: &str) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return };
+    fn map<T: serde::de::DeserializeOwned + Default>(v: &serde_json::Value, key: &str) -> T {
+        v.get(key).and_then(|m| serde_json::from_value(m.clone()).ok()).unwrap_or_default()
+    }
+    mem(|m| {
+        m.season_to_show = map(&v, "seasonToShow");
+        m.season_number = map(&v, "seasonNumber");
+        m.show_name = map(&v, "showName");
+        m.labels = map(&v, "labels");
+    });
+}
+
 pub fn is_season_label(label: &str) -> bool {
     season_label_number(label).is_some()
 }
@@ -668,6 +697,16 @@ mod tests {
             settings_addon: None,
             info: None,
         }
+    }
+
+    #[test]
+    fn memory_round_trips_in_the_old_pages_format() {
+        load_memory_json(r#"{"seasonToShow":{"s2":"show"},"seasonNumber":{"s2":2},"showName":{"show":"Heat"},"labels":7}"#);
+        assert_eq!((season_parent("s2"), season_number("s2"), remembered_name("show")), ("show".into(), Some(2), "Heat".into()));
+        let v: serde_json::Value = serde_json::from_str(&memory_json()).unwrap_or_default();
+        assert_eq!(v["seasonNumber"]["s2"], 2);
+        assert_eq!(v["labels"], serde_json::json!({}));
+        load_memory_json("{}");
     }
 
     #[test]

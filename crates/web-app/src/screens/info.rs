@@ -403,15 +403,18 @@ fn roll_over(y: i32, m: i32, d: i32) -> Option<remedy_ui::i18n::Date> {
     remedy_ui::i18n::Date::new(y2, m2 as u8, (d - days) as u8)
 }
 
-/// "1.2K votes", the page's English compact form; empty for none.
-///
-/// ENGINE GAP: info.ts writes the count with `maximumFractionDigits: 1` (`12.3K`, `123.5K`);
-/// RemedyUI's `CompactOptions` sets significant digits, not fraction digits
-/// (remedy-ui-services-i18n/src/locale.rs `CompactOptions`), so `12K` and `123K` here.
+/// "1.2K votes", "12.3K votes": the page's English compact form with at most one digit
+/// after the point (info.ts `votes`, `maximumFractionDigits: 1`); empty for none.
 pub fn votes(ui: &Ui, count: Option<u64>) -> String {
+    votes_in(&page_locale(ui), count)
+}
+
+/// [`votes`] in `locale`.
+pub fn votes_in(locale: &str, count: Option<u64>) -> String {
     let Some(c) = count.filter(|c| *c > 0) else { return String::new() };
-    let n = remedy_ui::i18n::NumberSymbols::for_locale(&page_locale(ui));
-    let text = remedy_ui::i18n::Decimal::new(i128::from(c), 0).map(|d| n.compact(d)).unwrap_or_else(|| c.to_string());
+    let n = remedy_ui::i18n::NumberSymbols::for_locale(locale);
+    let one = remedy_ui::i18n::CompactOptions::default().max_fraction_digits(1);
+    let text = remedy_ui::i18n::Decimal::new(i128::from(c), 0).map(|d| n.compact_with(d, one)).unwrap_or_else(|| c.to_string());
     format!("{text} {}", if c == 1 { "vote" } else { "votes" })
 }
 
@@ -1081,6 +1084,15 @@ mod tests {
         assert_eq!(kicker(&MediaInfo { kind: Some(MediaKind::Episode), ..MediaInfo::default() }), "Episode");
         assert!(several(&["A, B".into()]) && !several(&["A".into(), " ".into()]));
         assert_eq!(year_of(&MediaInfo { premiered: Some("2005-04-04".into()), ..MediaInfo::default() }), "2005");
+    }
+
+    #[test]
+    fn votes_read_as_intl_compact_with_one_fraction_digit() {
+        assert_eq!(votes_in("en", Some(1)), "1 vote");
+        assert_eq!(votes_in("en", Some(950)), "950 votes");
+        assert_eq!(votes_in("en", Some(12_345)), "12.3K votes");
+        assert_eq!(votes_in("en", Some(123_456)), "123.5K votes");
+        assert_eq!(votes_in("en", Some(0)), "");
     }
 
     #[test]
