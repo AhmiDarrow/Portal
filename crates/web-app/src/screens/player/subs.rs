@@ -10,14 +10,9 @@
 //! Online files come uncut (offset 0) and sit on the work's time, so they stay right after a
 //! skip; the job's own tracks are cut to their stream and go on the work's time from it.
 //!
-//! ENGINE GAP (RemedyUI `remedy-ui-media-playback/src/player.rs`): a track the app added can
-//! be neither replaced nor removed (only `add_subtitles` / `add_subtitles_stream`, 1946-1974),
-//! and `replace_source` keeps the app's tracks (`load(.., same_work: true ..)`, 1576-1584,
-//! 1106-1118). So (1) a video track cut to a stream that started later (a resume) has no
-//! cues before that point after a skip back, where player.ts attached the new stream's
-//! file; and (2) playing another title while one plays (not as its next, which uses
-//! `start_next` and drops them) leaves the last title's loaded tracks in the menu. Auto and
-//! the dock only ever show tracks loaded for the current item.
+//! A video track is cut to its stream: after a seek back before that stream's start, the
+//! new stream's file replaces it (`replace_subtitles_stream`), as player.ts attaches each
+//! stream's own track; another title drops the last one's tracks (`replace_work`).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -94,6 +89,8 @@ struct State {
     pick: Option<String>,
     /// Choices handed to the player: key and track index.
     loaded: Vec<(String, usize)>,
+    /// Where the stream a loaded video track was cut to started (key, seconds).
+    cut_from: Vec<(String, f64)>,
     /// The choice being fetched.
     loading: String,
     failed: HashSet<String>,
@@ -191,6 +188,9 @@ impl Dock {
             self.match_prefs();
         }
         self.subs().tracks = job.subtitles.clone();
+        if !fresh {
+            self.recut_stream_tracks();
+        }
         self.paint_choices();
         self.apply_subs();
         self.await_tracks(job);
@@ -334,21 +334,42 @@ impl Dock {
         self.fetch_sub(key);
     }
 
+    /// The new stream starts before a loaded video track's: its own file takes that track's
+    /// place, so the cues before the old start show again (player.ts `fillSubtitles`).
+    fn recut_stream_tracks(&self) {
+        let origin = self.0.st.borrow().origin;
+        let stale: Vec<(String, usize)> = {
+            let s = self.subs();
+            s.loaded
+                .iter()
+                .filter(|(k, _)| k.starts_with("e:") && s.cut_from.iter().any(|(c, from)| c == k && *from > origin + 0.5))
+                .cloned()
+                .collect()
+        };
+        for (key, i) in stale {
+            self.fetch_track(key, Some(i));
+        }
+    }
+
     fn fetch_sub(&self, key: String) {
+        self.subs().loading = key.clone();
+        self.fetch_track(key, None);
+    }
+
+    /// Fetches choice `key` and adds it, or with `replace` puts it in place of that track.
+    fn fetch_track(&self, key: String, replace: Option<usize>) {
         let (token, url, label, lang, online) = {
-            let mut s = self.subs();
-            s.loading = key.clone();
+            let s = self.subs();
             let id = &key[2..];
             if key.starts_with("e:") {
                 let Some(t) = s.tracks.iter().find(|t| t.id.to_string() == id).cloned() else { return };
                 (s.token, t.url.clone(), track_name(&self.0.ui, &t), t.lang.clone(), false)
             } else {
                 let c = s.online.items.iter().find(|c| c.id == id).cloned();
-                // The CC button shows this name: the language, unless one loaded already has it.
-                let taken = |l: &str| untrack(|| self.0.player.subtitle_tracks()).iter().any(|t| t.label == l);
+                // The whole name, release and source: the CC button ends a long one in "…".
                 let label = match &c {
-                    Some(c) if !taken(&c.language_name) => c.language_name.clone(),
-                    Some(c) => candidate_title(c),
+                    Some(c) if c.source.trim().is_empty() => candidate_title(c),
+                    Some(c) => format!("{} · {}", candidate_title(c), c.source.trim()),
                     None => "Subtitles".to_owned(),
                 };
                 // Uncut: the whole file on the work's time stays right after any skip.
@@ -363,11 +384,13 @@ impl Dock {
             let me = Dock(i);
             {
                 let s = me.subs();
-                if s.token != token || s.loading != key {
+                if s.token != token || (replace.is_none() && s.loading != key) {
                     return;
                 }
             }
-            me.subs().loading.clear();
+            if replace.is_none() {
+                me.subs().loading.clear();
+            }
             let cues = out.as_ref().ok().map(|text| {
                 let format = SubtitleFormat::sniff(text).unwrap_or(SubtitleFormat::WebVtt);
                 parse_subtitles(text, format)
@@ -382,8 +405,20 @@ impl Dock {
                     }
                     let track = SubtitleTrack { label, language: lang.clone(), cues };
                     let p = &me.0.player;
+                    let from = me.0.st.borrow().origin;
+                    if let Some(i) = replace {
+                        me.quietly(|| {
+                            p.replace_subtitles_stream(i, track);
+                        });
+                        me.subs().cut_from.retain(|(k, _)| *k != key);
+                        me.subs().cut_from.push((key, from));
+                        return;
+                    }
                     let at = me.quiet_add(|| if online { p.add_subtitles(track) } else { p.add_subtitles_stream(track) });
                     me.subs().loaded.push((key.clone(), at));
+                    if !online {
+                        me.subs().cut_from.push((key.clone(), from));
+                    }
                     // An online pick is remembered by its language once it loads, for the next video.
                     if online && me.subs().pick.as_deref() == Some(&key) {
                         if let Some(l) = lang {
@@ -395,6 +430,8 @@ impl Dock {
                     me.0.player.set_captions_loading(false);
                     me.clear_sub_note(true);
                 }
+                // The old cut stays; the next stream tries again.
+                _ if replace.is_some() => {}
                 (out, _) => {
                     {
                         let mut s = me.subs();

@@ -126,6 +126,8 @@ struct State {
     audio_pending: bool,
     stall_timer: Option<u64>,
     last_state: Option<PlaybackState>,
+    /// The item (its file) whose stream the player holds: another one is a new work.
+    work: Option<String>,
 }
 
 thread_local! {
@@ -976,15 +978,18 @@ impl Dock {
         let resume = self.0.target.get_untracked().ok().flatten().and_then(|t| t.resume_seconds);
         let origin = job.position.filter(|p| p.is_finite() && *p >= 0.0).unwrap_or_else(|| applied_seek(resume));
         let duration = job.duration.filter(|d| d.is_finite() && *d >= 0.0).unwrap_or(0.0);
-        let as_next = {
+        let file = self.0.target.get_untracked().ok().flatten().map(|t| t.file);
+        let (as_next, other_work) = {
             let mut st = self.0.st.borrow_mut();
+            let other_work = st.work.is_some() && st.work != file;
+            st.work = file;
             st.origin = origin;
             st.job_duration = duration;
             st.attached = true;
             st.start_failed = false;
             st.left_at = 0.0;
             st.last_ready = Some(job.clone());
-            std::mem::take(&mut st.as_next)
+            (std::mem::take(&mut st.as_next), other_work)
         };
         self.paint_audio(Some(job));
         let mut timeline = Timeline::new(dur(origin));
@@ -997,6 +1002,9 @@ impl Dock {
         self.quietly(|| {
             if new_work {
                 self.0.player.start_next(source, Some(timeline));
+            } else if other_work {
+                // Another title while one plays: its tracks and caption delay go with it.
+                self.0.player.replace_work(source, Some(timeline));
             } else {
                 self.0.player.replace_source(source, timeline);
             }
@@ -1100,9 +1108,9 @@ impl Dock {
     /// Play after a failure (player.ts `togglePlay`): the item again when it never started,
     /// else the stream again from where it stopped.
     fn retry(&self, at: f64) {
-        let (failed, job, last, attached, left) = {
+        let (failed, job, last, attached) = {
             let st = self.0.st.borrow();
-            (st.start_failed, st.job.clone(), st.last_ready.clone(), st.attached, st.left_at)
+            (st.start_failed, st.job.clone(), st.last_ready.clone(), st.attached)
         };
         let target = self.0.target.get_untracked().ok().flatten();
         if failed {
@@ -1112,7 +1120,6 @@ impl Dock {
             return;
         }
         let (Some(_), Some(last), false) = (job, last, attached) else { return };
-        let at = if left > 0.0 { left } else { at };
         let end = self.progress_duration();
         if at > 60.0 && (end <= 0.0 || end - at > 30.0) {
             self.skip_to(at);
