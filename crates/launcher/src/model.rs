@@ -1,4 +1,4 @@
-//! The tray's state and menu, kept free of Win32 so it can be tested.
+//! The tray's state and menu, kept free of platform code so it can be tested.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -25,7 +25,7 @@ const HUNG_FOR_BUSY: Duration = Duration::from_secs(3 * 60);
 /// How long after a start the server counts as starting.
 const STARTUP_GRACE: Duration = HUNG_FOR_BUSY;
 
-/// Menu commands. The Win32 menu item ids are these values.
+/// Menu commands. The tray menu's item ids are these values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cmd {
     Open = 1,
@@ -58,11 +58,11 @@ impl Cmd {
         Cmd::ToggleEncoder,
     ];
 
-    pub fn id(self) -> usize {
-        self as usize
+    pub fn id(self) -> u32 {
+        self as u32
     }
 
-    pub fn from_id(id: usize) -> Option<Cmd> {
+    pub fn from_id(id: u32) -> Option<Cmd> {
         Cmd::ALL.into_iter().find(|cmd| cmd.id() == id)
     }
 }
@@ -81,6 +81,8 @@ pub struct Item {
     pub cmd: Option<Cmd>,
     pub label: String,
     pub enabled: bool,
+    /// A setting turned on or off: shown with a check mark when `checked`.
+    pub checkable: bool,
     pub checked: bool,
     /// Shown in bold; what a left click does.
     pub default: bool,
@@ -92,6 +94,7 @@ impl Item {
             cmd: Some(cmd),
             label: label.into(),
             enabled,
+            checkable: false,
             checked: false,
             default: false,
         }
@@ -102,12 +105,14 @@ impl Item {
             cmd: None,
             label: label.into(),
             enabled: false,
+            checkable: false,
             checked: false,
             default: false,
         }
     }
 
     fn checked(mut self, checked: bool) -> Self {
+        self.checkable = true;
         self.checked = checked;
         self
     }
@@ -580,24 +585,6 @@ fn encoder_line(encoder: &EncoderChoice) -> String {
         Some(card) if encoder.hardware => format!("Video encoding: {card} graphics card"),
         Some(_) => "Video encoding: processor".to_string(),
     }
-}
-
-/// Copies `text` into a fixed, NUL-terminated UTF-16 buffer, cutting it
-/// short when it does not fit.
-pub fn fill_wide(buffer: &mut [u16], text: &str) {
-    let Some(room) = buffer.len().checked_sub(1) else {
-        return;
-    };
-    let mut used = 0;
-    for unit in text.encode_utf16().take(room) {
-        buffer[used] = unit;
-        used += 1;
-    }
-    // Do not leave half of a surrogate pair at the end.
-    if used > 0 && (0xD800..0xDC00).contains(&buffer[used - 1]) {
-        used -= 1;
-    }
-    buffer[used..].fill(0);
 }
 
 #[cfg(test)]
