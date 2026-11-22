@@ -226,12 +226,11 @@ fn build(ui: &Ui, ctx: &Ctx, req: InfoRequest, info: MediaInfo, opener: Option<E
             l.wrap = true;
             l.gap = (16.0, 4.8);
             l.shrink = 0.0;
-            l.margin.top = 0.0;
-            l.padding = if phone {
-                Insets { top: 11.2, bottom: 14.4, start: 16.0, end: 16.0 }
-            } else {
-                Insets { top: 12.0, bottom: 16.0, start: 27.2, end: 27.2 }
-            };
+        })
+        .padding(if phone {
+            Insets { top: 11.2, bottom: 14.4, start: 16.0, end: 16.0 }
+        } else {
+            Insets { top: 12.0, bottom: 16.0, start: 27.2, end: 27.2 }
         })
         // .info-status is order 2 with margin-left auto: the sources line comes first.
         .child(sources.clone())
@@ -263,9 +262,9 @@ fn build(ui: &Ui, ctx: &Ctx, req: InfoRequest, info: MediaInfo, opener: Option<E
             l.inset = Insets::ZERO;
             l.width = Length::Percent(1.0);
             l.height = Length::Percent(1.0);
-            l.padding = if phone { Insets::ZERO } else { Insets::all(24.0) };
             l.align_items = if phone { Align::Stretch } else { Align::Center };
         })
+        .padding(if phone { Insets::ZERO } else { Insets::all(24.0) })
         .child(dialog.clone());
     // max-height: min(92vh, 56rem); width: min(54rem, 100%); a full-screen sheet on a phone.
     let d2 = dialog.clone();
@@ -576,7 +575,7 @@ fn paint(refresh: bool) {
         .row()
         .gap(if phone { 15.2 } else { 22.4 })
         .align(if fanart.is_some() { Align::End } else { Align::Start })
-        .layout(move |l| l.padding = head_pad(has_fanart));
+        .padding(head_pad(has_fanart));
     let mut hero = hero;
     if let Some(url) = fanart.clone() {
         let backdrop = ui
@@ -593,7 +592,7 @@ fn paint(refresh: bool) {
         // (remedy-ui-media-image/src/lib.rs `place`).
         let img = ui.el("p_info_backdrop_img").child(picture(&ui, url, move || {
             b2.remove();
-            let _ = h2.clone().align(Align::Start).layout(move |l| l.padding = head_pad(false));
+            let _ = h2.clone().align(Align::Start).padding(head_pad(false));
         }));
         let scrim = ui.el("p_info_scrim");
         let fill = |el: El| {
@@ -706,12 +705,10 @@ fn paint(refresh: bool) {
     }
     let hero = hero.child(head.child(heading));
 
-    let mut body = ui.el("p_info_body").column().fill_width().layout(move |l| {
-        l.padding = if phone {
-            Insets { top: 17.6, bottom: 4.8, start: 16.0, end: 16.0 }
-        } else {
-            Insets { top: 20.8, bottom: 6.4, start: 27.2, end: 27.2 }
-        };
+    let mut body = ui.el("p_info_body").column().fill_width().padding(if phone {
+        Insets { top: 17.6, bottom: 4.8, start: 16.0, end: 16.0 }
+    } else {
+        Insets { top: 20.8, bottom: 6.4, start: 27.2, end: 27.2 }
     });
     if let Some(t) = info.tagline.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         body = body.child(margin(italic(&ui, "p_info_tagline", t), 0.0, 9.6));
@@ -797,10 +794,8 @@ fn paint(refresh: bool) {
                 .row()
                 .align(Align::Center)
                 .gap(if phone { 7.2 } else { 9.6 })
-                .layout(move |l| {
-                    l.min_width = Length::Px(0.0);
-                    l.padding = Insets { top: 5.6, bottom: 5.6, start: 5.6, end: if phone { 8.8 } else { 12.8 } };
-                })
+                .layout(move |l| l.min_width = Length::Px(0.0))
+                .padding(Insets { top: 5.6, bottom: 5.6, start: 5.6, end: if phone { 8.8 } else { 12.8 } })
                 .semantics(Semantics::new(Role::ListItem))
                 .child(face)
                 .child(words);
@@ -809,7 +804,7 @@ fn paint(refresh: bool) {
         let section = ui
             .el("p_info_section")
             .column()
-            .child(margin(w::heading(&ui, 3, "Cast").variant("info"), 0.0, 8.8))
+            .child(margin(w::heading(&ui, 3, "Cast"), 0.0, 8.8))
             .child(grid);
         body = body.child(section);
     }
@@ -983,8 +978,8 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
             .letter_spacing(LetterSpacing::Em(0.1))
             .text_transform(TextTransform::Upper),
     );
-    s.rule("heading", Some("info"), none, StylePatch::default().heading(true).weight(400.0).text_size(32.0).foreground(k.text));
-    s.rule("heading", Some("info_phone"), none, StylePatch::default().heading(true).weight(400.0).text_size(24.0).foreground(k.text));
+    s.rule("heading", Some("info"), none, StylePatch::default().heading(true).weight(400.0).text_size(32.0).foreground(k.text).line_height(remedy_ui::style::LineHeight::Relative(1.2)));
+    s.rule("heading", Some("info_phone"), none, StylePatch::default().heading(true).weight(400.0).text_size(24.0).foreground(k.text).line_height(remedy_ui::style::LineHeight::Relative(1.2)));
     s.rule("p_info_muted", None, none, StylePatch::default().foreground(k.muted));
     s.rule("p_info_star", None, none, StylePatch::default().foreground(k.gold).text_size(16.8));
     s.rule("p_info_score", None, none, StylePatch::default().text_size(17.92).weight(700.0));
@@ -1008,7 +1003,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         "p_info_tagline",
         None,
         none,
-        StylePatch::default().heading(true).text_size(17.92).foreground(k.muted),
+        StylePatch::default().heading(true).text_size(17.92).foreground(k.muted).line_height(remedy_ui::style::LineHeight::Relative(1.4)),
     );
     s.rule("p_info_plot_none", None, none, StylePatch::default().foreground(k.muted));
     s.rule("p_info_dt", None, none, StylePatch::default().foreground(k.muted));
@@ -1031,6 +1026,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         StylePatch::default().text_size(13.12).weight(600.0).letter_spacing(LetterSpacing::Em(0.03)),
     );
     s.rule("p_info_initials", Some("phone"), none, StylePatch::default().text_size(12.0));
+    s.rule("p_info_words", None, none, StylePatch::default().line_height(remedy_ui::style::LineHeight::Relative(1.25)));
     s.rule("p_info_person", None, none, StylePatch::default().weight(600.0).text_size(15.04));
     s.rule("p_info_person", Some("phone"), none, StylePatch::default().text_size(14.08));
     s.rule("p_info_role", None, none, StylePatch::default().foreground(k.muted).text_size(13.44));

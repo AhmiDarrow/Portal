@@ -81,7 +81,7 @@ pub fn card(ui: &Ui, ctx: &Ctx, folder: &str, item: &BrowseItem, view: Option<&S
     let (it, o) = (item.clone(), open.clone());
     let play = play
         // .card-play > :last-child: 0.55rem under it.
-        .layout(|l| l.padding.bottom = 8.8)
+        .padding(Insets { top: 0.0, bottom: 8.8, start: 0.0, end: 0.0 })
         .on_click(move || o(&it))
         .semantics(Semantics::new(Role::Button).label(label.clone()).action(Action::Click));
     let mut card = ui
@@ -103,9 +103,9 @@ pub fn card(ui: &Ui, ctx: &Ctx, folder: &str, item: &BrowseItem, view: Option<&S
             .row()
             .gap(1.6)
             .layout(|l| {
-                l.padding = Insets { top: 2.4, bottom: 6.4, start: 5.6, end: 5.6 };
                 l.margin.top = remedy_ui::layout::AUTO;
             })
+            .padding(Insets { top: 2.4, bottom: 6.4, start: 5.6, end: 5.6 })
             .semantics(Semantics::new(Role::Group).label(label.clone()))
             .child(saved::save_button_for(ui, ctx, List::Watchlist, m.save.clone(), "card"))
             .child(saved::save_button_for(ui, ctx, List::Bookmarks, m.save.clone(), "card"))

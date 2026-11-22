@@ -60,8 +60,8 @@ pub fn season_tabs(ui: &Ui, ctx: &Ctx, view: &ShowView, path: &str) -> Option<El
         .layout(|l| {
             l.shrink = 0.0;
             l.margin.bottom = 17.6;
-            l.padding = Insets { top: 1.6, bottom: 8.8, start: 1.6, end: 1.6 };
         })
+        .padding(Insets { top: 1.6, bottom: 8.8, start: 1.6, end: 1.6 })
         .semantics(Semantics::new(Role::Navigation).label("Seasons"));
     let mut row = row.child(tab(ui, ctx, &view.show.save.id, "All seasons".into(), false, false));
     let mut current_tab = None;
