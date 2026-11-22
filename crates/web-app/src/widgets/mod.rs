@@ -28,6 +28,8 @@ use crate::theme::Look;
 /// The shared widgets' rules in Portal's sheet ([`crate::theme::sheet`]).
 pub fn rules(s: &mut StyleSheet, k: &Look) {
     controls::rules(s, k);
+    page::rules(s, k);
+    crate::screens::history::rules(s, k);
     art::rules(s, k);
     card::rules(s, k);
     shelf::rules(s, k);
