@@ -714,7 +714,8 @@ fn paint(refresh: bool) {
         body = body.child(margin(italic(&ui, "p_info_tagline", t), 0.0, 9.6));
     }
     match info.plot.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-        Some(p) => body = body.child(margin(text(&ui, "p_info_plot", p).layout(|l| l.max_width = Length::Px(68.0 * 8.5)), 0.0, 17.6)),
+        // max-width: 68ch, a "0" in Remedy Sans at 16 px being 10.68 px wide.
+        Some(p) => body = body.child(margin(text(&ui, "p_info_plot", p).layout(|l| l.max_width = Length::Px(68.0 * 10.68)), 0.0, 17.6)),
         None if lookup != Lookup::Loading => {
             body = body.child(margin(text(&ui, "p_info_plot_none", "No summary is available for this title."), 0.0, 17.6));
         }
