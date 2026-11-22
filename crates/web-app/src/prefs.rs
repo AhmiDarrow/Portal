@@ -2,16 +2,15 @@
 //! and the language last picked, the audio language last picked and Autoplay next, kept by
 //! Portal (`/api/prefs`); the volume stays in each browser. The old page's own copy
 //! (`portal-playback` in localStorage) is read at start, so this page starts with the
-//! choices that browser last saw.
-//!
-//! ENGINE GAP: the copy cannot be written back (see `stored.rs`), so a volume set here lasts
-//! until the page reloads, and an offline page does not remember a choice made here.
+//! choices that browser last saw, and every change here is written back to it (prefs.ts
+//! `writeLocal`), in the old page's own JSON, so the volume stays per device.
 
 use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
 use portal_api::{PrefsBody, PrefsPut, Quality, SubtitleMode};
-use remedy_ui::reactive::{Cancel, Scope, Signal};
+use remedy_ui::reactive::{Cancel, Persist, PersistStore, Plain, Scope, Signal};
+use serde::Serialize;
 
 use crate::{api, Ctx};
 
@@ -99,6 +98,55 @@ pub fn parse_local(raw: Option<&str>) -> Prefs {
     }
 }
 
+/// The old page's item as `JSON.stringify(current)` writes it: its keys, in its order.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Local<'a> {
+    quality: &'a str,
+    subtitles: &'static str,
+    subtitles_set: bool,
+    subtitle_language: Option<&'a str>,
+    audio_language: Option<&'a str>,
+    autoplay: bool,
+    #[serde(serialize_with = "js_number")]
+    volume: f32,
+}
+
+/// A number as JavaScript writes it: `1`, not `1.0`.
+fn js_number<S: serde::Serializer>(v: &f32, s: S) -> Result<S::Ok, S::Error> {
+    if v.fract() == 0.0 { s.serialize_i64(*v as i64) } else { s.serialize_f32(*v) }
+}
+
+fn local(p: &Prefs) -> Local<'_> {
+    Local {
+        quality: p.quality.as_str(),
+        subtitles: mode_str(p.subtitles),
+        subtitles_set: p.subtitles_set,
+        subtitle_language: p.subtitle_language.as_deref(),
+        audio_language: p.audio_language.as_deref(),
+        autoplay: p.autoplay,
+        volume: p.volume,
+    }
+}
+
+fn local_item() -> Persist {
+    Persist::new(KEY).plain(Plain::Json)
+}
+
+/// Keeps this page's choices in the old page's item from now on.
+pub fn attach(store: Option<PersistStore>) {
+    STORE.with(|s| *s.borrow_mut() = store);
+}
+
+/// prefs.ts `writeLocal`; a refused write keeps the choice for this page view.
+fn write_local(p: &Prefs) {
+    STORE.with(|s| {
+        if let Some(store) = s.borrow().as_ref() {
+            let _ = store.save(&local_item(), &local(p));
+        }
+    });
+}
+
 struct Sync {
     /// Bumped by every change here, so an older answer from Portal cannot undo it.
     version: u64,
@@ -109,6 +157,7 @@ struct Sync {
 
 thread_local! {
     static PREFS: Cell<Option<Signal<Prefs>>> = const { Cell::new(None) };
+    static STORE: RefCell<Option<PersistStore>> = const { RefCell::new(None) };
     static SYNC: RefCell<Sync> = RefCell::new(Sync { version: 0, pending: PrefsPut::default(), timer: None, first_done: false });
 }
 
@@ -142,6 +191,7 @@ fn adopt(b: &PrefsBody) {
     next.subtitle_language = clean_language(b.prefs.subtitle_language.as_deref());
     next.audio_language = clean_language(b.prefs.audio_language.as_deref());
     next.autoplay = b.prefs.autoplay;
+    write_local(&next);
     s.set_if_changed(next);
 }
 
@@ -253,6 +303,7 @@ pub fn set(ctx: &Ctx, patch: Patch) {
         p.volume = v.clamp(0.0, 1.0);
     }
     SYNC.with(|s| s.borrow_mut().version += 1);
+    write_local(&p);
     signal().set_if_changed(p);
     if pending_empty(&shared) {
         return;
@@ -315,5 +366,19 @@ mod tests {
         assert_eq!(parse_local(Some(r#"{"volume":7}"#)).volume, 1.0);
         assert_eq!(clean_language(Some("und")), None);
         assert_eq!(clean_language(Some("english")), None);
+    }
+
+    #[test]
+    fn writes_the_old_pages_copy_as_json_stringify() {
+        let mut p = Prefs::default();
+        assert_eq!(
+            serde_json::to_string(&local(&p)).unwrap(),
+            r#"{"quality":"auto","subtitles":"off","subtitlesSet":false,"subtitleLanguage":null,"audioLanguage":null,"autoplay":true,"volume":1}"#
+        );
+        p.volume = 0.35;
+        p.audio_language = Some("pt-BR".into());
+        let json = serde_json::to_string(&local(&p)).unwrap();
+        assert!(json.contains(r#""audioLanguage":"pt-BR""#) && json.ends_with(r#""volume":0.35}"#), "{json}");
+        assert_eq!(parse_local(Some(&json)), p);
     }
 }
