@@ -83,6 +83,18 @@ impl ApiError {
     }
 }
 
+/// What a page says when a call fails (main.ts `detail`): "Portal is not answering." when
+/// nothing answered, else the server's sentence.
+pub fn shown_detail(e: &ApiError) -> String {
+    if e.status.is_none() {
+        return "Portal is not answering.".into();
+    }
+    match e.detail.trim() {
+        "" => "Portal could not load this page.".into(),
+        d => d.to_owned(),
+    }
+}
+
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.detail)
