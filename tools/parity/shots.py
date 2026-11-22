@@ -206,6 +206,8 @@ def main():
     ap.add_argument("--fail-above", type=float, default=0.0, help="exit 1 when a non-text score is above this %% (default %(default)s)")
     ap.add_argument("--click", action="append", default=[],
                     help="after load, click the control `role:name[:nth]` (repeatable), e.g. button:Info:1")
+    ap.add_argument("--extra", action="append", default=[],
+                    help="another page to shoot, `name=#/hash` (repeatable), e.g. a folder opened directly")
     ap.add_argument("--tag", default="", help="suffix for the output folder names, e.g. -info")
     args = ap.parse_args()
 
@@ -214,6 +216,7 @@ def main():
     mask_cfg = json.loads(Path(args.mask).read_text()) if args.mask else {}
     include = set(args.routes.split(",")) if args.routes else None
     routes = wd.routes(server, include)
+    routes += [tuple(e.split("=", 1)) for e in args.extra]
     out = Path(args.out)
     results = []
 
