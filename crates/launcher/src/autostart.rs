@@ -1,84 +1,34 @@
-//! "Start with Windows": the `Portal` value under
-//! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The installer's
-//! "Start Portal in the background when I sign in" option writes the same value.
+//! "Start with Windows" (and with the session on Linux): on Windows the `Portal` value under
+//! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, which the installer's "Start Portal
+//! in the background when I sign in" option writes too; on Linux an XDG autostart entry
+//! (`~/.config/autostart/io.github.ahmidarrow.portal.desktop`). Either way it starts the
+//! tray without opening a browser.
 
-use std::path::Path;
+use remedy_ui::desktop::autostart::{self, Entry};
 
-pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-pub const VALUE_NAME: &str = "Portal";
+/// The name the Run value and the autostart entry show.
+pub const NAME: &str = "Portal";
+/// The autostart entry's file name on Linux.
+pub const ID: &str = "io.github.ahmidarrow.portal";
+/// What the tray is started with at sign-in.
+pub const ARGS: &[&str] = &["--no-browser"];
 
-/// The command Windows runs at sign-in: the tray, without opening a browser.
-pub fn run_command(exe: &Path) -> String {
-    format!("\"{}\" --no-browser", exe.display())
+/// This launcher, started at sign-in from the Run key (not a Startup-folder shortcut), as the
+/// installer sets it.
+pub fn entry() -> Result<Entry, String> {
+    Entry::current(NAME, ID, ARGS)
+        .map(|e| e.windows_run_key(true))
+        .map_err(|err| format!("Portal could not find itself: {err}"))
 }
 
-#[cfg(windows)]
-mod imp {
-    use super::{run_command, RUN_KEY, VALUE_NAME};
-    use crate::ui::wide;
-    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-    use windows_sys::Win32::System::Registry::{
-        RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
-    };
-
-    pub fn enabled() -> bool {
-        let key = wide(RUN_KEY);
-        let name = wide(VALUE_NAME);
-        let mut size = 0u32;
-        // SAFETY: the strings are NUL-terminated and outlive the call; a null
-        // data pointer asks only for the size.
-        let status = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                key.as_ptr(),
-                name.as_ptr(),
-                RRF_RT_REG_SZ,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut size,
-            )
-        };
-        status == ERROR_SUCCESS
-    }
-
-    pub fn set(on: bool) -> Result<(), String> {
-        let key = wide(RUN_KEY);
-        let name = wide(VALUE_NAME);
-        let status = if on {
-            let exe = std::env::current_exe()
-                .map_err(|err| format!("Portal could not find itself: {err}"))?;
-            let data = wide(&run_command(&exe));
-            // SAFETY: the strings are NUL-terminated and outlive the call; the
-            // size is the data's length in bytes, including the NUL.
-            unsafe {
-                RegSetKeyValueW(
-                    HKEY_CURRENT_USER,
-                    key.as_ptr(),
-                    name.as_ptr(),
-                    REG_SZ,
-                    data.as_ptr().cast(),
-                    (data.len() * 2) as u32,
-                )
-            }
-        } else {
-            // SAFETY: the strings are NUL-terminated and outlive the call.
-            match unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr()) } {
-                ERROR_FILE_NOT_FOUND => ERROR_SUCCESS,
-                other => other,
-            }
-        };
-        if status == ERROR_SUCCESS {
-            Ok(())
-        } else {
-            Err(format!(
-                "Portal could not change its sign-in setting (error {status})."
-            ))
-        }
-    }
+pub fn enabled() -> bool {
+    entry().is_ok_and(|e| autostart::enabled(&e))
 }
 
-#[cfg(windows)]
-pub use imp::{enabled, set};
+pub fn set(on: bool) -> Result<(), String> {
+    autostart::set(&entry()?, on)
+        .map_err(|err| format!("Portal could not change its sign-in setting ({err})."))
+}
 
 #[cfg(test)]
 #[path = "../../../tests-private/launcher/src/autostart.rs"]
