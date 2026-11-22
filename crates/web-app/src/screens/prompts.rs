@@ -409,6 +409,10 @@ pub fn set_watch(w: Watch) {
     WATCH.with(|c| c.set(w));
 }
 
+/// The watch so far: until when (ms), whether a dialog showed, since when none has, and
+/// what to call at the end.
+type WatchState = Rc<RefCell<(u64, bool, Option<u64>, Option<Box<dyn FnOnce(Outcome)>>)>>;
+
 /// What an action's dialog says, for the page: the text, and the progress dialog when it
 /// can be cancelled.
 pub type OnNote = Rc<dyn Fn(String, Option<Prompt>)>;
@@ -421,9 +425,9 @@ pub fn await_addon_prompts(ui: &Ui, ctx: &Ctx, on_note: OnNote, done: impl FnOnc
     let w = WATCH.with(Cell::get);
     let started = Instant::now();
     let st = Rc::new(RefCell::new((w.quiet, false, None::<u64>, Some(Box::new(done) as Box<dyn FnOnce(Outcome)>))));
-    fn tick(ui: Ui, ctx: Ctx, on_note: OnNote, started: remedy_ui::core::time::Instant, w: Watch, st: Rc<RefCell<(u64, bool, Option<u64>, Option<Box<dyn FnOnce(Outcome)>>)>>) {
+    fn tick(ui: Ui, ctx: Ctx, on_note: OnNote, started: remedy_ui::core::time::Instant, w: Watch, st: WatchState) {
         let ms = move || started.elapsed().as_millis() as u64;
-        let finish = |st: &Rc<RefCell<(u64, bool, Option<u64>, Option<Box<dyn FnOnce(Outcome)>>)>>, o: Outcome| {
+        let finish = |st: &WatchState, o: Outcome| {
             if let Some(d) = st.borrow_mut().3.take() {
                 d(o);
             }

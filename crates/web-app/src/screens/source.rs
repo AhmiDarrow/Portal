@@ -248,7 +248,7 @@ fn search_row(ui: &Ui, field: El) -> El {
 
 /// A column that repaints when `tick` changes.
 fn live(ui: &Ui, tick: Signal<u64>, keep: bool, build: impl Fn() -> Vec<El> + 'static) -> El {
-    let c = ui.el("p_src_rows").column().fill_width();
+    let c = ui.el("p_src_rows").column().gap(8.8).fill_width();
     let (c2, u) = (c.clone(), ui.clone());
     c.bind(move || {
         tick.get();
@@ -419,10 +419,19 @@ fn paint(ui: &Ui, ctx: &Ctx, root: &El, addon_error: &str, repo_error: &str) {
             w::text(ui, "")
                 .variant("muted")
                 .text(move || remedy_ui::view::RichText::plain(nv.get()))
+                .hidden(true)
                 .semantics(remedy_ui::a11y::Semantics::new(remedy_ui::a11y::Role::Status))
                 .layout(|l| l.margin.bottom = 5.6),
         );
 
+    let note_el = add.clone();
+    let add = add.bind(move || {
+        let empty = nv.get().is_empty();
+        // The status line (the card's last child) takes no room while empty.
+        if let Some(last) = untrack(|| note_el.ui().tree().children(note_el.id()).last().copied()) {
+            let _ = note_el.ui().element(last).hidden(empty);
+        }
+    });
     let jump = sections::jump_bar(
         ui,
         phone,
@@ -1049,7 +1058,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     s.rule("p_addon", None, States::SELECTED, StylePatch::default().border(k.gold));
     s.rule("p_src_rows", None, States::NONE, StylePatch::default());
     s.rule("p_src_rule", None, States::NONE, StylePatch::default().background(k.line));
-    s.rule("p_addon_art", None, States::NONE, StylePatch::default().radius(8.0).background(k.well));
+    s.rule("p_addon_art", None, States::NONE, StylePatch::default().radius(8.0).background(k.well).background_layers(crate::theme::gradient(crate::widgets::art::GLOW)));
     s.rule("label", Some("p_strong"), States::NONE, StylePatch::default().foreground(k.text));
     // .in-use: a gold pill.
     s.rule(

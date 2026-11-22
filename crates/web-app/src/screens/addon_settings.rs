@@ -106,7 +106,7 @@ pub fn remote_view(ui: &Ui, ctx: &Ctx) -> El {
 
 thread_local! {
     /// The add-on and category last shown (main.ts `categoryAddon`, `categoryIndex`).
-    static CATEGORY: RefCell<(String, usize)> = RefCell::new((String::new(), 0));
+    static CATEGORY: RefCell<(String, usize)> = const { RefCell::new((String::new(), 0)) };
 }
 
 /// The page's state: the form as loaded, a value per setting (shown in every category and
@@ -141,13 +141,19 @@ pub fn view(ui: &Ui, ctx: &Ctx, addon: &str) -> El {
     let open = Rc::new(Cell::new(true));
     let ticket = ctx.activity.begin(Owner::Page, describe_settings(false), 0);
     source::note_kodi(ctx, open.clone(), describe_settings(true));
-    // Opened from a link rather than Source: the add-on's name is read too.
-    if source::known_addons().is_empty() {
-        let c = ctx.clone();
+    // Opened from a link rather than Source: the add-on's name is read too, before painting.
+    let names_pending = Rc::new(Cell::new(source::known_addons().is_empty()));
+    type Later = Rc<RefCell<Option<Box<dyn FnOnce()>>>>;
+    let ready: Later = Rc::default();
+    if names_pending.get() {
+        let (np, rd) = (names_pending.clone(), ready.clone());
         ctx.api.run(api::addons(), &Cancel::new(), move |out| {
             if let Ok(l) = out {
                 source::note_addons(l.items);
-                c.activity.notice(String::new());
+            }
+            np.set(false);
+            if let Some(f) = rd.borrow_mut().take() {
+                f();
             }
         });
     }
@@ -162,6 +168,7 @@ pub fn view(ui: &Ui, ctx: &Ctx, addon: &str) -> El {
         c.activity.end_page();
         match out {
             Ok(doc) => {
+                let paint_now = move || {
                 CATEGORY.with(|k| {
                     let mut k = k.borrow_mut();
                     if k.0 != doc.addon_id {
@@ -191,6 +198,12 @@ pub fn view(ui: &Ui, ctx: &Ctx, addon: &str) -> El {
                         untrack(|| paint(&form, &r2));
                     }
                 });
+                };
+                if names_pending.get() {
+                    *ready.borrow_mut() = Some(Box::new(paint_now));
+                } else {
+                    paint_now();
+                }
             }
             Err(e) => {
                 let _ = r.clone().child(w::text(&u, shown_detail(&e)).variant("error"));
@@ -398,8 +411,6 @@ fn row(form: &Rc<Form>, f: &SettingsField) -> El {
             l.columns = cols.clone();
             l.gap = (16.0, 4.8);
             l.align_items = Align::Center;
-            l.padding.top = 9.6;
-            l.padding.bottom = 9.6;
         })
         .fill_width()
         .child(name_el)
@@ -662,6 +673,7 @@ fn run_action(form: &Rc<Form>, id: &str, label: &str, note: Signal<Note>, done: 
 
 pub fn rules(s: &mut StyleSheet, k: &Look) {
     s.rule("p_setting_rule", None, States::NONE, StylePatch::default().background(mix(k.line, 0.75, remedy_ui::core::Color::TRANSPARENT)));
+    s.rule("p_setting", None, States::NONE, StylePatch::default().padding(remedy_ui::core::Insets { top: 9.6, bottom: 9.6, start: 0.0, end: 0.0 }));
     s.rule("p_setting_head_rule", None, States::NONE, StylePatch::default().background(k.line));
     s.rule(
         "heading",
