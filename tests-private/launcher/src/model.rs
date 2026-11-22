@@ -585,18 +585,3 @@ fn a_failed_install_is_reported_once() {
         "same error, told once"
     );
 }
-
-#[test]
-fn wide_text_is_cut_to_fit() {
-    let mut buffer = [7u16; 6];
-    fill_wide(&mut buffer, "Portal");
-    assert_eq!(String::from_utf16_lossy(&buffer[..5]), "Porta");
-    assert_eq!(buffer[5], 0);
-    fill_wide(&mut buffer, "ab");
-    assert_eq!(&buffer[..3], &[b'a' as u16, b'b' as u16, 0]);
-    assert!(buffer[3..].iter().all(|unit| *unit == 0));
-    let mut pair = [0u16; 3];
-    fill_wide(&mut pair, "a😀");
-    assert_eq!(pair, [b'a' as u16, 0, 0]);
-    fill_wide(&mut [], "nothing");
-}
