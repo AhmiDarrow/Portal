@@ -285,9 +285,15 @@ fn titles(d: &Dock, variant: &'static str) -> El {
         let _ = l2.clone().hidden(b5().1.is_empty());
     });
     let (h2, l3) = (heading.clone(), line.clone());
-    let lines = if variant.is_empty() { 2 } else { 1 };
-    let _ = h2.max_lines(lines);
-    let _ = l3.max_lines(lines);
+    let (theater, pl) = (i.theater, i.player.clone());
+    // In theater the titles take one line each, the heading at 1.05rem.
+    let heading = heading.bind(move || {
+        let wide = variant.is_empty() && theater.get() && pl.is_theater();
+        let v = if wide { "theater" } else { variant };
+        let lines = if variant.is_empty() && !wide { 2 } else { 1 };
+        let _ = h2.clone().variant(v).max_lines(lines);
+        let _ = l3.clone().variant(v).max_lines(lines);
+    });
     ui.el("p_dock_titles").column().grow(1.0).layout(|l| l.min_width = Length::Px(0.0)).child(heading).child(line)
 }
 
@@ -891,7 +897,8 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     s.rule("p_dock_side", Some("mini"), States::NONE, StylePatch::default().padding(Insets::ZERO));
     // #dock-title: 1.35rem; 1.05rem in theater; 0.95rem minimized.
     s.rule("p_dock_title", None, States::NONE, StylePatch::default().heading(true).weight(400.0).text_size(21.6).line_height(LineHeight::Relative(1.25)).foreground(k.text));
-    s.rule("p_dock_title", Some("theater"), States::NONE, StylePatch::default().heading(true).text_size(16.8).line_height(LineHeight::Relative(1.25)));
+    s.rule("p_dock_title", Some("theater"), States::NONE, StylePatch::default().heading(true).weight(400.0).text_size(16.8).line_height(LineHeight::Relative(1.25)).foreground(k.text));
+    s.rule("p_dock_episode", Some("theater"), States::NONE, StylePatch::default().foreground(k.muted).padding(Insets::ZERO));
     s.rule("p_dock_title", Some("mini"), States::NONE, StylePatch::default().heading(true).weight(400.0).text_size(15.2).line_height(LineHeight::Relative(1.25)).foreground(k.text));
     s.rule("p_dock_episode", None, States::NONE, StylePatch::default().foreground(k.muted).padding(Insets { top: 4.0, bottom: 0.0, start: 0.0, end: 0.0 }));
     s.rule("p_dock_episode", Some("mini"), States::NONE, StylePatch::default().foreground(k.muted).text_size(12.8).padding(Insets::ZERO));
@@ -919,7 +926,9 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
             .border(k.line)
             .border_width(1.0)
             .radius(8.0)
-            .padding(Insets { top: 6.72, bottom: 6.72, start: 12.0, end: 12.0 }),
+            .padding(Insets { top: 6.72, bottom: 6.72, start: 12.0, end: 12.0 })
+            .weight(400.0)
+            .text_size(16.0),
     );
     s.rule("button", Some("dock"), States::HOVER, StylePatch::default().border(k.gold).background(mix(k.gold, 0.10, k.bg)));
     s.rule("button", Some("dock"), States::DISABLED, StylePatch::default().opacity(0.45));
