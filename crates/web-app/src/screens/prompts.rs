@@ -247,6 +247,70 @@ pub fn show(ui: &Ui, ctx: &Ctx, p: &Prompt, hooks: Hooks) {
     SHOWN.with(|s| *s.borrow_mut() = Some(Shown { id: p.id.clone(), layer, back }));
 }
 
+/// A yes-or-cancel question in Portal's theme, in place of the old page's `window.confirm`
+/// (plan decisions: themed confirms): `question`, then OK (the default, focused) and Cancel.
+/// Escape cancels; focus goes back where it was.
+pub fn confirm(ui: &Ui, question: &str, on_yes: impl Fn() + 'static) {
+    let back = ui.tree().focused().map(|f| ui.element(f));
+    let slot: Rc<RefCell<Option<El>>> = Rc::default();
+    let close = {
+        let slot = slot.clone();
+        Rc::new(move || {
+            if let Some(l) = slot.borrow_mut().take() {
+                l.remove();
+            }
+            if let Some(b) = &back {
+                b.focus();
+            }
+        })
+    };
+    let (c1, c2, c3) = (close.clone(), close.clone(), close);
+    let ok = crate::widgets::button(ui, "OK", move || {
+        c1();
+        on_yes();
+    });
+    let actions = ui
+        .el("p_prompt_actions")
+        .row()
+        .layout(|l| {
+            l.margin.top = 12.8;
+            l.wrap = true;
+            l.gap = (8.0, 8.0);
+        })
+        .child(ok.clone())
+        .child(crate::widgets::button(ui, "Cancel", move || c2()));
+    let card = ui
+        .el("p_prompt_card")
+        .column()
+        .semantics(Semantics::new(Role::Dialog).label(question.to_owned()).modal(true))
+        .child(ui.el("heading").variant("2").text(question.to_owned()))
+        .child(actions)
+        .layout(|l| l.max_width = Length::Px(704.0));
+    let layer = ui
+        .el("p_prompt")
+        .column()
+        .align(Align::Center)
+        .justify(Justify::Center)
+        .focus_scope()
+        .layout(|l| {
+            l.position = Position::Absolute;
+            l.inset = Insets::ZERO;
+            l.width = Length::Percent(1.0);
+            l.height = Length::Percent(1.0);
+        })
+        .padding(Insets::all(16.0))
+        .child(card)
+        .on_key(move |e| {
+            if e.pressed && e.key == Key::Escape {
+                c3();
+                return true;
+            }
+            false
+        });
+    *slot.borrow_mut() = Some(ui.overlay(layer));
+    ok.focus_visibly();
+}
+
 /// "File on this PC": picks a file, uploads it, and answers with the path Kodi can read.
 fn file_button(ui: &Ui, ctx: &Ctx, p: &Prompt, hooks: &Hooks) -> El {
     let busy = remedy_ui::reactive::Signal::new(false);
