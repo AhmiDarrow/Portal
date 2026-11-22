@@ -36,6 +36,12 @@ pub struct Ctx {
     /// `GET /api/pair/me` once it answered: paired, and whether this is the PC itself
     /// (`this_pc` stands in for main.ts's `isRemote()`).
     pub me: Signal<Option<PairMe>>,
+    /// The header's activity panel and the notice line under it.
+    pub activity: widgets::activity::Activity,
+    /// The window's width in CSS px, for the 720 px and 1600 px layouts.
+    pub width: Signal<f32>,
+    /// `GET /api/update` as last read (the header's pill; Settings' Updates card).
+    pub update: Signal<Option<portal_api::UpdateInfo>>,
 }
 
 impl Ctx {
