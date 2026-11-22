@@ -367,8 +367,21 @@ fn after_paint(ui: &Ui, ctx: &Ctx, page: &BrowsePage, view: &ShowView, version: 
     if let Some((path, s, e)) = landing {
         if let Some((_, row)) = rows.iter().find(|(k, _)| *k == (path.clone(), s, e)) {
             LANDING.with(|l| *l.borrow_mut() = None);
-            let row = row.clone();
-            ui.after(std::time::Duration::ZERO, move || row.scroll_into_view());
+            // `scrollIntoView({ block: "center" })`: a window-tall box around the row's middle,
+            // once the row is laid out.
+            let (r2, u2) = (row.clone(), ui.clone());
+            let done = Rc::new(std::cell::Cell::new(false));
+            let _ = row.clone().on_resize(move |size| {
+                if done.replace(true) {
+                    return;
+                }
+                let (r3, h) = (r2.clone(), u2.window_size().height);
+                u2.after(std::time::Duration::ZERO, move || {
+                    let mid = size.height / 2.0;
+                    let top = remedy_ui::core::Point::new(0.0, mid - h / 2.0);
+                    r3.scroll_rect_into_view(remedy_ui::core::Rect::from_origin_size(top, remedy_ui::core::Size::new(size.width, h)));
+                });
+            });
         }
     }
     if !check_library {

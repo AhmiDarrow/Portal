@@ -884,13 +884,13 @@ fn paint(refresh: bool) {
 /// `.info-status.is-loading::before`: a 0.8rem ring, a quarter of it gold, turning once in
 /// 0.9 s (2.4 s under reduced motion).
 fn spinner(ui: &Ui) -> El {
-    let start = std::time::Instant::now();
-    let period = if ui.reduced_motion() { 2.4 } else { 0.9 };
+    let _ = ui;
     ui.el("p_info_spinner").width(12.8).height(12.8).layout(|l| l.shrink = 0.0).paint(move |cx| {
         use remedy_ui::paint::{Brush, Item, Path, Stroke, StrokeCap};
         let r = cx.size.width / 2.0 - 1.0;
         let c = (cx.size.width / 2.0, cx.size.height / 2.0);
-        let turn = (start.elapsed().as_secs_f32() / period).fract() * std::f32::consts::TAU;
+        let period = if cx.reduced_motion { 2.4 } else { 0.9 };
+        let turn = (cx.time.as_secs_f32() / period).fract() * std::f32::consts::TAU;
         let ring = |from: f32, to: f32| {
             let mut p = Path::new();
             let steps = 24;
