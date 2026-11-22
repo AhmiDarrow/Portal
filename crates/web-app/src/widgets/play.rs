@@ -1,6 +1,6 @@
 //! What a page asks the player to play (player.ts `PlayTarget`), built the way main.ts
 //! builds it (`movieTarget`, `playTitle`, `playEpisode`, `openItem`), and the one place pages
-//! hand it over: [`play`]. The player dock (plan P7) takes it from there.
+//! hand it over: [`play`]. The player dock takes it from there.
 
 use portal_api::{Episode, MediaInfo, PlayKind, TitleDetail, TitleKind};
 
@@ -98,8 +98,24 @@ pub fn title_target(title: &TitleDetail, from_start: bool) -> Option<PlayTarget>
     Some(episode_target(title, &e, from_start))
 }
 
-/// Hands `target` to the player. Until the player dock is ported (plan P7) this is where it
-/// will pick it up; pages already build every target as main.ts does.
+/// Hands `target` to the player dock (player.ts `playFromLibrary`): it opens the full player,
+/// out of the mini one, and asks the add-on for a stream.
 pub fn play(ctx: &Ctx, target: PlayTarget) {
-    let _ = (ctx, target);
+    let _ = ctx;
+    crate::screens::player::play_from_library(target);
+}
+
+thread_local! {
+    static SOURCE_PICK: std::cell::RefCell<Option<(String, PlayTarget)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The add-on answered "Choose source" with a folder of its sources: the folder, and the item
+/// they are for (main.ts `sourcePick`), for Browse to show as a source list.
+pub fn set_source_pick(pick: Option<(String, PlayTarget)>) {
+    SOURCE_PICK.with(|s| *s.borrow_mut() = pick);
+}
+
+/// The source list Browse should show for `path`, if the player sent it there.
+pub fn source_pick(path: &str) -> Option<PlayTarget> {
+    SOURCE_PICK.with(|s| s.borrow().as_ref().filter(|(p, _)| p == path).map(|(_, t)| t.clone()))
 }

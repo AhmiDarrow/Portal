@@ -220,7 +220,7 @@ fn name(list: List) -> &'static str {
 }
 
 /// Glyph sizes: `.pill-btn svg` 1.1rem; `.icon-btn svg` 1.3rem, 1.2rem in a card's actions.
-fn glyph_size(variant: &str) -> f32 {
+pub fn glyph_size(variant: &str) -> f32 {
     match variant {
         "pill" => 17.6,
         "card" => 19.2,
@@ -228,7 +228,7 @@ fn glyph_size(variant: &str) -> f32 {
     }
 }
 
-fn frame(ui: &Ui, variant: &'static str) -> El {
+pub fn frame(ui: &Ui, variant: &'static str) -> El {
     let widget = if variant == "pill" { "p_pill" } else { "p_icon_btn" };
     let el = ui.el(widget).variant(variant).row().align(Align::Center);
     if variant == "pill" {
