@@ -8,7 +8,7 @@ use remedy_ui::a11y::{Action, Role, Semantics};
 use remedy_ui::core::Insets;
 use remedy_ui::layout::{Align, Display, Justify, Length, Position, Track};
 use remedy_ui::reactive::{untrack, Cancel, Signal};
-use remedy_ui::style::{States, StylePatch, StyleSheet};
+use remedy_ui::style::{BorderEdge, BorderSide, States, StylePatch, StyleSheet};
 use remedy_ui::view::{RichText, TextStylePatch};
 use remedy_ui::widgets as w;
 use remedy_ui::{El, Ui};
@@ -173,14 +173,10 @@ fn details(ui: &Ui, ctx: &Ctx, title: &TitleDetail, phone: bool) -> El {
                 l.margin = Insets { top: 18.4, bottom: 18.4, start: 0.0, end: 0.0 };
                 l.shrink = 0.0;
             })
-            .child(w::heading(ui, 2, name).variant("season").layout(|l| {
-                l.margin = Insets { top: 3.2, bottom: 0.0, start: 0.0, end: 0.0 };
-            }).padding(Insets { top: 0.0, bottom: 6.4, start: 0.0, end: 0.0 }))
-            // `.season > h2`'s border-bottom, with its 0.6rem margin under it.
-            .child(ui.el("p_season_rule").height(1.0).fill_width().layout(|l| {
-                l.shrink = 0.0;
-                l.margin.bottom = 9.6;
-            }));
+            // `.season > h2`: its border-bottom, with 0.6rem under it.
+            .child(w::heading(ui, 2, name).variant("season").fill_width().layout(|l| {
+                l.margin = Insets { top: 3.2, bottom: 9.6, start: 0.0, end: 0.0 };
+            }).padding(Insets { top: 0.0, bottom: 6.4, start: 0.0, end: 0.0 }));
         for e in &season.episodes {
             sec = sec.child(episode_row(ui, ctx, title, e, phone));
         }
@@ -271,7 +267,7 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         none,
         StylePatch::default().border(k.line).border_width(1.0).radius(14.0).shadow(k.shadow),
     );
-    s.rule("heading", Some("season"), none, StylePatch::default().heading(true).weight(400.0).text_size(24.0).foreground(k.text).line_height(remedy_ui::style::LineHeight::Relative(1.25)));
+    s.rule("heading", Some("season"), none, StylePatch::default().heading(true).weight(400.0).text_size(24.0).foreground(k.text).line_height(remedy_ui::style::LineHeight::Relative(1.25)).border_side(BorderEdge::Bottom, BorderSide::new(1.0, k.line)));
     s.rule(
         "p_episode",
         None,
@@ -286,7 +282,6 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
         none,
         StylePatch::default().foreground(k.muted).letter_spacing(remedy_ui::style::LetterSpacing::Em(0.03)),
     );
-    s.rule("p_season_rule", None, none, StylePatch::default().background(k.line));
     s.rule("p_bar", Some("still_small"), none, StylePatch::default().radius(0.0));
     // `.episode button { background: transparent }`.
     s.rule("p_button", Some("episode"), none, StylePatch::default().background(remedy_ui::core::Color::TRANSPARENT));

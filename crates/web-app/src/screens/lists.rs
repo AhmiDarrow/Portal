@@ -103,7 +103,7 @@ fn paint(ui: &Ui, ctx: &Ctx, list: List, body: &CardList, source: Option<BrowseS
             let name = if s.name.is_empty() { "the add-on".to_owned() } else { s.name.clone() };
             state = state.child(w::row(ui).child(crate::widgets::link(ui, &ctx.router, &Page::Browse(s.path).path(), format!("Browse {name}"), "", None)).layout(|l| l.margin.bottom = 8.0));
         }
-        keep.set_rows(Vec::new());
+        keep.set_rows(Vec::new(), &head);
         return w::column(ui).fill_width().child(head).child(state);
     }
     let on_play = card::play_card(ctx);
@@ -115,6 +115,6 @@ fn paint(ui: &Ui, ctx: &Ctx, list: List, body: &CardList, source: Option<BrowseS
             card::card(ui, ctx, it, Some(tools), on_play.clone())
         })
         .collect();
-    keep.set_rows(cards.clone());
+    keep.set_rows(cards.clone(), &head);
     w::column(ui).fill_width().child(head).child(browse_card::grid(ui, cards, narrow))
 }

@@ -6,9 +6,9 @@
 
 use remedy_ui::core::Insets;
 use remedy_ui::image::{image_ext, Fit, ImageOptions, ImageState, Source};
-use remedy_ui::layout::{Align, Justify, Length, Position, AUTO};
+use remedy_ui::layout::{Align, Justify, Length, Position};
 use remedy_ui::reactive::Signal;
-use remedy_ui::style::{States, StylePatch, StyleSheet};
+use remedy_ui::style::{BorderEdge, BorderSide, States, StylePatch, StyleSheet};
 use remedy_ui::{El, Ui};
 
 use crate::api::encode;
@@ -161,13 +161,7 @@ pub fn art(ui: &Ui, art: Option<&str>, name: &str, variant: &'static str) -> El 
         let pad = if frame.get() == Frame::Square { width.get() * 0.18 } else { 0.0 };
         let _ = i2.clone().padding(Insets::all(pad));
     });
-    let mut outer = ui.el("p_art_frame").fill_width().layout(|l| l.position = Position::Relative).child(inner);
-    if rule {
-        outer = outer.child(ui.el("p_art_rule").height(1.0).layout(|l| {
-            l.position = Position::Absolute;
-            l.inset = Insets { top: AUTO, start: 0.0, end: 0.0, bottom: 0.0 };
-        }));
-    }
+    let outer = ui.el("p_art_frame").variant(if rule { "card" } else { "" }).fill_width().layout(|l| l.position = Position::Relative).child(inner);
     let o2 = outer.clone();
     let outer = outer.bind(move || {
         let a = frame.get().aspect();
@@ -198,7 +192,7 @@ pub const GLOW: &str = "radial-gradient(circle at 50% 42%, color-mix(in srgb, va
 pub fn rules(s: &mut StyleSheet, k: &Look) {
     // .art: the well under a gold glow around 50% 42%.
     s.rule("p_art", None, States::NONE, StylePatch::default().background(k.well).background_layers(gradient(GLOW)));
-    s.rule("p_art_rule", None, States::NONE, StylePatch::default().background(k.line));
+    s.rule("p_art_frame", Some("card"), States::NONE, StylePatch::default().border_side(BorderEdge::Bottom, BorderSide::new(1.0, k.line)));
     s.rule("p_art_letter_text", None, States::NONE, StylePatch::default().foreground(k.gold).heading(true).text_size(32.0));
 }
 

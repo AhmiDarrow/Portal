@@ -9,7 +9,7 @@ use portal_api::PairState;
 use remedy_ui::a11y::{Live, Role, Semantics};
 use remedy_ui::layout::{Align, Length};
 use remedy_ui::reactive::{Cancel, Signal};
-use remedy_ui::style::{States, StylePatch, StyleSheet};
+use remedy_ui::style::{States, StylePatch, StyleSheet, TextAlign};
 use remedy_ui::style::LetterSpacing;
 use remedy_ui::view::{RichText, Style, TextStylePatch};
 use remedy_ui::widgets as w;
@@ -33,8 +33,6 @@ pub fn spaced(code: &str) -> String {
     }
 }
 
-// ENGINE GAP: no `text-align: center` for an element's text (ParagraphOptions::align is not
-// reachable from El); the page centers each line's box, so a wrapped line starts at the left.
 pub fn view(ui: &Ui, ctx: &Ctx) -> El {
     ctx.window.set_title("Pair this device · Portal");
     let code = Signal::new("······".to_owned());
@@ -52,6 +50,7 @@ pub fn view(ui: &Ui, ctx: &Ctx) -> El {
         .align(Align::Center)
         .fill_width()
         .semantics(Semantics::new(Role::Main).label("Pair this device"))
+        .text_align(TextAlign::Center)
         .layout(|l| {
             l.max_width = Length::Px(544.0);
             l.align_self = Some(Align::Center);
