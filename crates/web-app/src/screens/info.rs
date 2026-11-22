@@ -934,7 +934,9 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
             .border_width(1.0)
             .radius(16.0)
             .shadow(Shadow::new(0.0, 28.0, 70.0, black(0.45)))
-            .outline_offset(-2.0),
+            .outline_offset(-2.0)
+            // The page's `font: 16px/1.5`: the dialog is a layer of its own, not under the page.
+            .line_height(remedy_ui::style::LineHeight::Relative(1.5)),
     );
     s.rule("p_info_dialog", Some("phone"), none, StylePatch::default().border_width(0.0).radius(0.0));
     s.rule(
