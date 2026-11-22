@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use portal_api::{EngineState, UpdateInfo, UpdateState};
-use remedy_ui::a11y::{Action, Role, Semantics};
+use remedy_ui::a11y::{Action, Popup, Role, Semantics};
 use remedy_ui::core::{Color, Insets, Point, Vec2};
 use remedy_ui::input::{Key, PointerPhase};
 use remedy_ui::layout::{Align, Length, Position, AUTO};
@@ -46,6 +46,7 @@ pub fn app(app: &App) {
     app.on_appearance(move |dark, _| prefers_dark.set(dark));
     let a = app.clone();
     app.open(WindowSpec::new("Portal"), move |ui, window| {
+        crate::widgets::shows::attach(a.persist_store());
         let ctx = Ctx {
             app: a.clone(),
             api: api::Api::new(&a),
@@ -352,7 +353,7 @@ fn theme_picker(ui: &Ui, ctx: &Ctx) -> El {
     });
     let t2 = toggle.clone();
     button.on_click(move || t2()).semantics(move || {
-        Semantics::new(Role::Button).label(format!("Theme, {}", name())).expanded(expanded.get()).action(Action::Click)
+        Semantics::new(Role::Button).label(format!("Theme, {}", name())).expanded(expanded.get()).has_popup(Popup::ListBox).action(Action::Click)
     })
 }
 
@@ -381,7 +382,7 @@ fn theme_menu(ui: &Ui, button: &El, chosen: Signal<String>, slot: Rc<Cell<Option
             l.max_height = Length::Px((window.height * 0.7).min(448.0));
         })
         .scroll()
-        .semantics(Semantics::new(Role::Menu).label("Themes"));
+        .semantics(Semantics::new(Role::ListBox).label("Themes"));
     let mut options = Vec::new();
     for (i, c) in theme::MENU.iter().enumerate() {
         let id = c.id.to_owned();
@@ -415,7 +416,7 @@ fn theme_menu(ui: &Ui, button: &El, chosen: Signal<String>, slot: Rc<Cell<Option
                 }
             })
             .semantics(move || {
-                Semantics::new(Role::MenuItemRadio).label(l2.clone()).checked(chosen.get() == id).action(Action::Click)
+                Semantics::new(Role::Option).label(l2.clone()).selected(chosen.get() == id).action(Action::Click)
             });
         let (o2, id3) = (opt.clone(), c.id);
         let opt = opt.bind(move || {
