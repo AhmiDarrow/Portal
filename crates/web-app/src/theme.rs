@@ -41,11 +41,6 @@ pub const MENU: &[Choice] = &[
     Choice { id: "alien", name: "Dark Purple", swatch: "#b026ff" },
 ];
 
-/// This browser's saved choice, as the old page saved it.
-pub fn saved() -> &'static str {
-    crate::stored::item(KEY).map_or(DEFAULT, |id| known(&id))
-}
-
 /// A saved id the menu knows, else the default (a stale or edited value).
 pub fn known(id: &str) -> &'static str {
     MENU.iter().find(|c| c.id == id).map_or(DEFAULT, |c| c.id)

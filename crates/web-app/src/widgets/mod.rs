@@ -7,6 +7,7 @@ pub mod activity;
 pub mod art;
 pub mod browse_card;
 pub mod card;
+pub mod confirm;
 pub mod controls;
 pub mod episode_row;
 pub mod glyphs;
@@ -48,4 +49,6 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     crate::screens::source::rules(s, k);
     crate::screens::addon_settings::rules(s, k);
     crate::screens::player::rules(s, k);
+    crate::screens::settings::rules(s, k);
+    crate::screens::pairing::rules(s, k);
 }
