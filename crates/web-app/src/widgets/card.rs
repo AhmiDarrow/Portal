@@ -271,7 +271,7 @@ fn rename_form(ui: &Ui, ctx: &Ctx, list: List, item: &Card, editing: Editing, ch
 /// selected, then Save and Cancel. `save` gets the trimmed name; an empty one says "Enter a
 /// name." and keeps the field.
 pub fn rename(ui: &Ui, ctx: &Ctx, name: &str, save: Rc<dyn Fn(String)>, cancel: Rc<dyn Fn()>) -> El {
-    let field = remedy_ui::widgets::text_input(ui, "Name");
+    let field = remedy_ui::widgets::text_input(ui, "Name").max_length(200);
     field.set_value(name);
     let (c, f2) = (ctx.clone(), field.clone());
     let submit = Rc::new(move || {

@@ -14,7 +14,7 @@ use portal_api::{AddonCard, AddonUpdate, InstallResult, RemoveResult, RepoAddon,
 use remedy_ui::image::{image_ext, Fit, ImageOptions, Source as ImgSource};
 use remedy_ui::layout::{Align, Length};
 use remedy_ui::reactive::{untrack, Cancel, Signal};
-use remedy_ui::style::{States, StylePatch, StyleSheet};
+use remedy_ui::style::{BorderEdge, BorderSide, States, StylePatch, StyleSheet};
 use remedy_ui::view::{EnterKey, InputPurpose, TextField};
 use remedy_ui::widgets as w;
 use remedy_ui::{El, Ui};
@@ -272,7 +272,8 @@ fn paint(ui: &Ui, ctx: &Ctx, root: &El, addon_error: &str, repo_error: &str) {
     let flash = st(|s| std::mem::take(&mut s.flash));
     let source_filter = filter_field(ui, "Filter video add-ons");
     let repo_filter = filter_field(ui, "Filter this repository");
-    let repo_videos = ui.el("p_src_videos").column().fill_width();
+    // .source-card #repo-videos { margin-top: 0.8rem }
+    let repo_videos = ui.el("p_src_videos").column().fill_width().layout(|l| l.margin.top = 12.8);
     let v = Rc::new(View {
         ui: ui.clone(),
         ctx: ctx.clone(),
@@ -342,10 +343,6 @@ fn paint(ui: &Ui, ctx: &Ctx, root: &El, addon_error: &str, repo_error: &str) {
     let vv2 = v.clone();
     let videos = repo_videos
         .clone()
-        .child(ui.el("p_src_rule").height(1.0).fill_width().layout(|l| {
-            l.margin.top = 12.8;
-            l.margin.bottom = 9.6;
-        }))
         .child(live(ui, v.videos, false, move || {
             let name = st(|s| if s.open_repo_name.is_empty() { "Repository".to_owned() } else { s.open_repo_name.clone() });
             vec![w::heading(&vv2.ui, 3, name)]
@@ -369,7 +366,7 @@ fn paint(ui: &Ui, ctx: &Ctx, root: &El, addon_error: &str, repo_error: &str) {
 
     // Add a repository.
     let url = w::text_input(ui, "Repository site or zip link").placeholder("Site or zip link").purpose(InputPurpose::Url).enter_key(EnterKey::Next);
-    let name = w::text_input(ui, "Name (optional)").placeholder("Name (optional)").enter_key(EnterKey::Go);
+    let name = w::text_input(ui, "Name (optional)").placeholder("Name (optional)").max_length(80).enter_key(EnterKey::Go);
     let (u2, n2, v2) = (url.clone(), name.clone(), v.clone());
     let submit = Rc::new(move || {
         let (link, label) = (u2.value(), n2.value());
@@ -1057,7 +1054,13 @@ pub fn rules(s: &mut StyleSheet, k: &Look) {
     s.rule("p_addon", None, States::HOVER, StylePatch::default().border(mix(k.gold, 0.48, k.line)));
     s.rule("p_addon", None, States::SELECTED, StylePatch::default().border(k.gold));
     s.rule("p_src_rows", None, States::NONE, StylePatch::default());
-    s.rule("p_src_rule", None, States::NONE, StylePatch::default().background(k.line));
+    // #repo-videos: a hairline over it, 0.6rem above what follows.
+    s.rule(
+        "p_src_videos",
+        None,
+        States::NONE,
+        StylePatch::default().border_side(BorderEdge::Top, BorderSide::new(1.0, k.line)).padding(remedy_ui::core::Insets { top: 9.6, bottom: 0.0, start: 0.0, end: 0.0 }),
+    );
     s.rule("p_addon_art", None, States::NONE, StylePatch::default().radius(8.0).background(k.well).background_layers(crate::theme::gradient(crate::widgets::art::GLOW)));
     s.rule("label", Some("p_strong"), States::NONE, StylePatch::default().foreground(k.text));
     // .in-use: a gold pill.

@@ -8,7 +8,6 @@ use std::rc::Rc;
 use portal_api::{HistoryEntry, HistoryList, HistoryName, HistoryTitle, PlayKind, TitleKind};
 use remedy_ui::a11y::{Action, Role, Semantics};
 use remedy_ui::core::Insets;
-use remedy_ui::i18n::{CalendarSymbols, Date, Time};
 use remedy_ui::image::{image_ext, Fit, ImageOptions, Source};
 use remedy_ui::layout::{Align, Length};
 use remedy_ui::reactive::{untrack, Cancel, Signal};
@@ -18,7 +17,7 @@ use remedy_ui::{El, Ui};
 
 use crate::api::{self, shown_detail};
 use crate::pages::Page;
-use crate::screens::info::page_locale;
+use crate::screens::info::local_string;
 use crate::theme::{mix, Look};
 use crate::widgets::activity::{describe_library, Library, Owner};
 use crate::widgets::art::{art_url, letter_tile};
@@ -73,7 +72,8 @@ pub fn view(ui: &Ui, ctx: &Ctx) -> El {
 }
 
 fn paint(ui: &Ui, ctx: &Ctx, body: &HistoryList, remote: bool, editing: Editing, refresh: Rc<dyn Fn()>, keep: &KeepRow) -> El {
-    let mut head = w::row(ui).gap(9.6).align(Align::Center).layout(|l| l.wrap = true).child(h1(ui, "History").layout(|l| l.margin = Insets::ZERO)); // .row > h1 { margin: 0 }
+    let title = h1(ui, "History").layout(|l| l.margin = Insets::ZERO); // .row > h1 { margin: 0 }
+    let mut head = w::row(ui).gap(9.6).align(Align::Center).layout(|l| l.wrap = true).child(title.clone());
     if !body.items.is_empty() && !remote {
         let (u, c, r) = (ui.clone(), ctx.clone(), refresh.clone());
         head = head.child(button(ui, "Clear all", move || {
@@ -90,32 +90,22 @@ fn paint(ui: &Ui, ctx: &Ctx, body: &HistoryList, remote: bool, editing: Editing,
     }
     let col = w::column(ui).fill_width().child(head);
     if body.items.is_empty() {
-        keep.set_rows(Vec::new());
+        keep.set_rows(Vec::new(), &title);
         return col.child(w::text(ui, "Nothing has been played in Portal yet.").variant("muted").layout(|l| l.margin.top = 16.0));
     }
     let rows: Vec<El> = body.items.iter().map(|e| row(ui, ctx, e, editing, refresh.clone())).collect();
-    keep.set_rows(rows.clone());
+    keep.set_rows(rows.clone(), &title);
     // .history-item { margin: 0.55rem 0 }, the margins between rows collapsing.
     col.child(w::column(ui).gap(8.8).fill_width().layout(|l| l.margin.top = 8.8).children(rows))
 }
 
 /// The line under the name: episode, when, and "Watched".
 pub fn facts(ui: &Ui, e: &HistoryEntry) -> String {
-    let when = if e.at > 0 { played_at(ui, e.at) } else { String::new() };
+    let when = if e.at > 0 { local_string(ui, e.at) } else { String::new() };
     let state = if e.finished { "Watched" } else { "" };
     [episode_code(e.season, e.episode), when, state.to_owned()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
 }
 
-/// When it was played, on this device's clock (`toLocaleString(PAGE_LOCALE)`).
-// ENGINE GAP: the engine has neither the UTC offset of a past instant (today's is used) nor
-// the numeric "11/22/2026, 3:04:05 PM" form; this is CalendarSymbols::date_time's form.
-fn played_at(ui: &Ui, at_ms: i64) -> String {
-    let local = at_ms.div_euclid(1000) + i64::from(ui.local_time().utc_offset);
-    let date = Date::from_days_since_epoch(local.div_euclid(86_400));
-    let secs = local.rem_euclid(86_400);
-    let Some(time) = Time::new((secs / 3600) as u8, (secs / 60 % 60) as u8) else { return String::new() };
-    CalendarSymbols::for_locale(&page_locale(ui)).date_time(date, time)
-}
 
 fn row(ui: &Ui, ctx: &Ctx, e: &HistoryEntry, editing: Editing, refresh: Rc<dyn Fn()>) -> El {
     let resume = if e.finished { None } else { resume_of(Some(e.position)) };

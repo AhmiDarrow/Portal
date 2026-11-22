@@ -8,7 +8,7 @@ use std::rc::Rc;
 use portal_api::{PlayKind, Quality, TitleKind};
 use remedy_ui::a11y::{Action, Live, Role, Semantics};
 use remedy_ui::core::{Color, CornerRadii, Insets};
-use remedy_ui::layout::{Align, Display, Length, Position, Track, AUTO};
+use remedy_ui::layout::{Align, Display, Justify, Length, Position, Track, AUTO};
 use remedy_ui::playback::{player_with, NextUpPlacement, PlayerParts};
 use remedy_ui::reactive::{untrack, Signal};
 use remedy_ui::style::{LineHeight, Shadow, States, StylePatch, StyleSheet};
@@ -442,7 +442,7 @@ fn quality_field(d: &Dock) -> El {
     let ui = &i.ui;
     let index_of = |q: Quality| QUALITIES.iter().position(|(x, _)| *x == q).unwrap_or(0);
     let shown = Signal::new(index_of(crate::prefs::now().quality));
-    let select = w::select(ui, "Quality", QUALITIES.iter().map(|(_, n)| (*n).to_owned()).collect(), shown).variant("dock");
+    let select = w::select(ui, "Quality", QUALITIES.iter().map(|(_, n)| (*n).to_owned()).collect(), shown).variant("dock").justify(Justify::SpaceBetween);
     // Choices made on another screen show here; a pick here applies after the menu settles.
     let ps = crate::prefs::signal();
     let last = Rc::new(Cell::new(crate::prefs::now().quality));
@@ -478,7 +478,7 @@ fn audio_field(d: &Dock) -> El {
             let at = chosen.and_then(|c| tracks.iter().position(|t| t.index == c)).unwrap_or(0);
             let shown = Signal::new(at);
             let tip = if tracks.len() < 2 { names[0].clone() } else { "Audio track".into() };
-            let s = w::select(&u, "Audio", names, shown).variant("dock").disabled(tracks.len() < 2);
+            let s = w::select(&u, "Audio", names, shown).variant("dock").justify(Justify::SpaceBetween).disabled(tracks.len() < 2);
             w::tooltip(&s, tip);
             let (me2, tracks2) = (me.clone(), tracks.clone());
             let first = Cell::new(true);
