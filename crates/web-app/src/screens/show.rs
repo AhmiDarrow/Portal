@@ -107,6 +107,7 @@ impl BrowseSource {
 pub fn folder_view(ui: &Ui, ctx: &Ctx, page: &BrowsePage, heading: &str, source: Option<BrowseSource>, search: El) -> Option<El> {
     shows::remember_folder(&page.path, &page.items);
     let show = page_show(page)?;
+    let show_id = show.save.id.clone();
     let version = Signal::new(0u32);
     let root = w::column(ui).fill_width();
     let (r2, u, c, p, h) = (root.clone(), ui.clone(), ctx.clone(), page.clone(), heading.to_owned());
@@ -128,6 +129,25 @@ pub fn folder_view(ui: &Ui, ctx: &Ctx, page: &BrowsePage, heading: &str, source:
             let el = paint(&u, &c, &p, &view, &h, source.as_ref(), remote, phone);
             let _ = r2.clone().child(el).child((*search).clone());
             after_paint(&u, &c, &p, &view, version, first.replace(false));
+        });
+    });
+    // A progress save for this show refreshes what its episodes say (main.ts
+    // `portal:progress`, 500 ms after the last one).
+    let (c, id, u) = (ctx.clone(), show_id, ui.clone());
+    let seen = Rc::new(std::cell::Cell::new(ctx.progress.get_untracked().map(|p| p.1).unwrap_or(0)));
+    let wait = Rc::new(std::cell::Cell::new(0u64));
+    let root = root.bind(move || {
+        let (pid, n) = c.progress.get();
+        if seen.replace(n) == n || pid != id {
+            return;
+        }
+        let mine = wait.get() + 1;
+        wait.set(mine);
+        let (c2, id2, w2) = (c.clone(), id.clone(), wait.clone());
+        u.after(std::time::Duration::from_millis(500), move || {
+            if w2.get() == mine {
+                refresh_library(&c2, id2, version);
+            }
         });
     });
     Some(root)
@@ -379,11 +399,15 @@ fn after_paint(ui: &Ui, ctx: &Ctx, page: &BrowsePage, view: &ShowView, version: 
             center_when_laid_out(ui.clone(), row.clone(), 40);
         }
     }
-    if !check_library {
-        return;
+    if check_library {
+        refresh_library(ctx, view.show.save.id.clone(), version);
     }
-    let id = view.show.save.id.clone();
-    let before = view.library.clone();
+}
+
+/// main.ts `refreshLibraryShow`: looks the show up in the library again and bumps `version`
+/// (a repaint) if anything changed, unless the page moved on meanwhile.
+fn refresh_library(ctx: &Ctx, id: String, version: Signal<u32>) {
+    let before = shows::library_show(&id);
     let (r, at) = (ctx.router.clone(), ctx.router.route_untracked());
     ctx.api.run(api::title(&id), &Cancel::new(), move |out| {
         if r.route_untracked() != at {
